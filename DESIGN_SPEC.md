@@ -2,7 +2,7 @@
 
 ## Overview
 
-A lightweight Slack bot that helps 3 students write well-structured epics and user stories through a simple two-phase process. Phase 1 creates the epic interactively. Phase 2 reviews it with fresh context. Output goes directly to GitHub as issues.
+A lightweight Slack bot that helps students write well-structured epics and user stories through a simple two-phase process. Phase 1 creates the epic interactively. Phase 2 reviews it with fresh context. Output goes directly to GitHub as issues.
 
 **Scope:** Single workspace, 3 users, 12-week project, minimal infrastructure.
 

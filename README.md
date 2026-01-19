@@ -69,7 +69,7 @@ GITHUB_REPO=your-repo
 npm start
 ```
 
-You should see: `⚡️ Epic Bot is running!`
+You should see: `⚡️ Epic Bot v0.2 is running!`
 
 ## Usage
 
@@ -148,11 +148,6 @@ epic-bot/
 ## Development
 
 To modify prompts, edit `prompts.js`.
-
-To change the review delay, edit this line in `bot.js`:
-```javascript
-}, 2 * 60 * 1000); // 2 minutes in milliseconds
-```
 
 ## License
 
