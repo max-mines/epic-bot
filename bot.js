@@ -2,7 +2,7 @@ require('dotenv').config();
 const { App } = require('@slack/bolt');
 const fs = require('fs');
 
-const VERSION = 'v0.2';
+const VERSION = 'v0.2.1';
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -12,9 +12,15 @@ const app = new App({
 });
 
 // In-memory session storage
+// TODO: Consider persisting sessions to handle bot restarts
 const sessions = new Map();
 
+// Cache for previous answers (per user)
+const answerCache = new Map();
+
 // /story command handler
+// TODO: Add /list-epics command to show all epics for a user
+// TODO: Add /edit-epic command to modify existing epics
 app.command('/story', async ({ command, ack, client }) => {
   await ack();
 
@@ -45,12 +51,23 @@ app.command('/story', async ({ command, ack, client }) => {
     lastActivity: Date.now()
   });
 
+  // Check if user has cached answers
+  const cached = answerCache.get(command.user_id);
+
   // Ask first question
-  await client.chat.postMessage({
-    channel: command.channel_id,
-    thread_ts: result.ts,
-    text: 'Q1: Who is this for? (e.g., "students", "instructors and students")'
-  });
+  if (cached && cached.users) {
+    await client.chat.postMessage({
+      channel: command.channel_id,
+      thread_ts: result.ts,
+      text: `Q1: Who is this for?\n\nPrevious answer: "${cached.users}"\n\nType \`same\` to reuse, or provide a new answer.`
+    });
+  } else {
+    await client.chat.postMessage({
+      channel: command.channel_id,
+      thread_ts: result.ts,
+      text: 'Q1: Who is this for? (e.g., "students", "instructors and students")'
+    });
+  }
 });
 
 // /delete-epic command handler
@@ -88,10 +105,10 @@ app.command('/delete-epic', async ({ command, ack, client }) => {
     const storyIssues = searchResults.data.items;
     const storyList = storyIssues.map(s => `- #${s.number}: ${s.title}`).join('\n');
 
-    // Post confirmation message in a thread
+    // Post confirmation message
     const result = await client.chat.postMessage({
       channel: command.channel_id,
-      text: `⚠️ Confirm deletion of epic #${epicNumber}: ${epicIssue.data.title}\n\n**Stories to be closed (${storyIssues.length}):**\n${storyList || '(none)'}\n\nType \`Y\` to confirm deletion, or anything else to cancel.`
+      text: `⚠️ Confirm deletion of epic #${epicNumber}: ${epicIssue.data.title}\n\n**Stories to be closed (${storyIssues.length}):**\n${storyList || '(none)'}\n\n⚠️ **Reply to this message** with \`Y\` to confirm deletion, or anything else to cancel.`
     });
 
     // Store deletion session
@@ -115,50 +132,381 @@ app.command('/delete-epic', async ({ command, ack, client }) => {
   }
 });
 
+// /review-epic command handler
+app.command('/review-epic', async ({ command, ack, client }) => {
+  await ack();
+
+  const epicId = command.text.trim();
+
+  if (!epicId) {
+    await client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: 'Please provide an epic ID: `/review-epic epic-2026-01-20T03-22-56`\n\nYou can find epic IDs in the `epics/` folder.'
+    });
+    return;
+  }
+
+  try {
+    // Load epic from JSON file
+    const epicPath = `./epics/${epicId}.json`;
+
+    if (!fs.existsSync(epicPath)) {
+      await client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: `❌ Epic file not found: ${epicPath}\n\nMake sure the epic ID is correct.`
+      });
+      return;
+    }
+
+    const epicData = JSON.parse(fs.readFileSync(epicPath, 'utf-8'));
+
+    // Create a new thread for the review
+    const result = await client.chat.postMessage({
+      channel: command.channel_id,
+      text: `📝 Reviewing epic: "${epicData.title}"\n\nRunning review...`
+    });
+
+    // Create session with loaded epic data
+    const session = {
+      state: 'REVIEWING',
+      description: epicData.title,
+      userId: command.user_id,
+      channelId: command.channel_id,
+      answers: {
+        users: epicData.users,
+        problem: epicData.problem,
+        techStack: epicData.tech_stack
+      },
+      stories: epicData.stories,
+      epic: epicData,
+      isExistingEpic: true, // Flag to prevent duplicate GitHub issue creation
+      lastActivity: Date.now()
+    };
+
+    sessions.set(result.ts, session);
+
+    // Run review
+    await runReview(epicData, result.ts, client, command.channel_id);
+
+  } catch (error) {
+    console.error('Error loading epic:', error);
+    await client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: `❌ Error loading epic: ${error.message}`
+    });
+  }
+});
+
 // Listen for thread replies
 app.message(async ({ message, client }) => {
   console.log('Received message:', {
     text: message.text,
     thread_ts: message.thread_ts,
+    ts: message.ts,
     bot_id: message.bot_id,
     has_session: !!sessions.get(message.thread_ts)
   });
 
-  if (!message.thread_ts) return; // Ignore non-thread messages
   if (message.bot_id) return; // Ignore bot messages
 
-  const session = sessions.get(message.thread_ts);
+  // Check for session - either in thread or as a reply to the original message
+  const threadTs = message.thread_ts || message.ts;
+  if (!message.thread_ts && !sessions.get(message.ts)) {
+    return; // Ignore non-thread messages that aren't part of a session
+  }
+
+  const session = sessions.get(threadTs);
   if (!session) {
-    console.log('No session found for thread:', message.thread_ts);
+    console.log('No session found for thread:', threadTs);
     return; // Not our conversation
   }
 
   console.log('Processing message in state:', session.state);
   session.lastActivity = Date.now();
-  await handleMessage(session, message.text, message.thread_ts, client);
+  await handleMessage(session, message.text, threadTs, client);
 });
+
+async function showStoryMenu(session, threadTs, client) {
+  const storyList = session.stories.map((s, i) =>
+    `${i + 1}. ${s.title}`
+  ).join('\n');
+
+  let doneText;
+  if (session.isExistingEpic) {
+    doneText = '• Type "done" to save changes and exit';
+  } else if (session.hasBeenReviewed) {
+    doneText = '• Type "done" to create GitHub issues';
+  } else {
+    doneText = '• Type "done" to finish refining';
+  }
+
+  await client.chat.postMessage({
+    channel: session.channelId,
+    thread_ts: threadTs,
+    text: `📝 Interactive Refinement Mode\n\nSelect a story to refine:\n${storyList}\n\n💡 Commands:\n• Type story number (e.g., "1" or "3")\n• Type "overview" to see all stories\n${doneText}`
+  });
+}
+
+async function handleInteractiveCommand(session, text, threadTs, client) {
+  const trimmed = text.trim().toLowerCase();
+
+  // Check if user wants to exit
+  if (trimmed === 'done') {
+    // Check if this is an existing epic (loaded via /review-epic)
+    if (session.isExistingEpic) {
+      // Save the updated epic and exit - don't create new GitHub issues
+      await client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: threadTs,
+        text: `✅ Epic updated and saved to epics/${session.epic.id}.json\n\n💡 This epic was loaded from an existing file. If you want to update GitHub issues, use \`/delete-epic\` to close the old issues, then create a new epic with \`/story\`.`
+      });
+      sessions.delete(threadTs);
+      return;
+    }
+
+    // Check if we've already reviewed (for new epics)
+    if (session.hasBeenReviewed) {
+      // Already reviewed, go straight to GitHub
+      await client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: threadTs,
+        text: 'Creating GitHub issues...'
+      });
+
+      const { createIssues } = require('./github');
+      const result = await createIssues(session.epic);
+
+      const storyList = result.stories.map(i => `- #${i.number}: ${i.title}`).join('\n');
+      await client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: threadTs,
+        text: `✅ Created epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+      });
+
+      sessions.delete(threadTs);
+    } else {
+      // Not reviewed yet, offer review option
+      session.state = 'APPROVAL';
+      await client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: threadTs,
+        text: `✅ Stories refined. What's next?\n\nType \`review\` to run quality review, or \`Y\` to create GitHub issues immediately.`
+      });
+    }
+    return;
+  }
+
+  // Check if user wants overview
+  if (trimmed === 'overview') {
+    const storyText = formatStories(session.stories);
+    await client.chat.postMessage({
+      channel: session.channelId,
+      thread_ts: threadTs,
+      text: `📋 All Stories:\n\n${storyText}`
+    });
+    await showStoryMenu(session, threadTs, client);
+    return;
+  }
+
+  // Check if user selected a story number
+  const storyNum = parseInt(trimmed);
+  if (!isNaN(storyNum) && storyNum >= 1 && storyNum <= session.stories.length) {
+    const storyIndex = storyNum - 1;
+    session.currentStoryIndex = storyIndex;
+    session.state = 'STORY_FOCUSED';
+
+    const story = session.stories[storyIndex];
+    const criteria = story.acceptance_criteria.map(c => `   - ${c}`).join('\n');
+
+    await client.chat.postMessage({
+      channel: session.channelId,
+      thread_ts: threadTs,
+      text: `🔍 Story #${storyNum}: ${story.title}\n\n   ${story.story}\n\nAcceptance Criteria:\n${criteria}\n\n💡 What would you like to change?\n\nCommands: "next" | "prev" | "back" | or describe changes`
+    });
+    return;
+  }
+
+  // Invalid command
+  await client.chat.postMessage({
+    channel: session.channelId,
+    thread_ts: threadTs,
+    text: `❌ Invalid command. Please type a story number (1-${session.stories.length}), "overview", or "done".`
+  });
+}
+
+async function handleStoryFocused(session, text, threadTs, client) {
+  const trimmed = text.trim().toLowerCase();
+
+  // Navigation commands
+  if (trimmed === 'next') {
+    if (session.currentStoryIndex < session.stories.length - 1) {
+      session.currentStoryIndex++;
+      const storyNum = session.currentStoryIndex + 1;
+      const story = session.stories[session.currentStoryIndex];
+      const criteria = story.acceptance_criteria.map(c => `   - ${c}`).join('\n');
+
+      await client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: threadTs,
+        text: `🔍 Story #${storyNum}: ${story.title}\n\n   ${story.story}\n\nAcceptance Criteria:\n${criteria}\n\n💡 What would you like to change?\n\nCommands: "next" | "prev" | "back" | or describe changes`
+      });
+    } else {
+      await client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: threadTs,
+        text: '❌ Already at the last story. Type "back" to return to menu or "done" to create GitHub issues.'
+      });
+    }
+    return;
+  }
+
+  if (trimmed === 'prev') {
+    if (session.currentStoryIndex > 0) {
+      session.currentStoryIndex--;
+      const storyNum = session.currentStoryIndex + 1;
+      const story = session.stories[session.currentStoryIndex];
+      const criteria = story.acceptance_criteria.map(c => `   - ${c}`).join('\n');
+
+      await client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: threadTs,
+        text: `🔍 Story #${storyNum}: ${story.title}\n\n   ${story.story}\n\nAcceptance Criteria:\n${criteria}\n\n💡 What would you like to change?\n\nCommands: "next" | "prev" | "back" | or describe changes`
+      });
+    } else {
+      await client.chat.postMessage({
+        channel: session.channelId,
+        thread_ts: threadTs,
+        text: '❌ Already at the first story. Type "back" to return to menu or continue refining.'
+      });
+    }
+    return;
+  }
+
+  if (trimmed === 'back') {
+    session.state = 'INTERACTIVE_MODE';
+    await showStoryMenu(session, threadTs, client);
+    return;
+  }
+
+  // User is making a refinement request
+  await client.chat.postMessage({
+    channel: session.channelId,
+    thread_ts: threadTs,
+    text: 'Refining story...'
+  });
+
+  const { refineSingleStory } = require('./claude');
+  const currentStory = session.stories[session.currentStoryIndex];
+  const epicContext = {
+    description: session.description,
+    users: session.answers.users,
+    problem: session.answers.problem,
+    techStack: session.answers.techStack
+  };
+
+  const updatedStory = await refineSingleStory(currentStory, text, epicContext);
+
+  // Preserve the story ID
+  updatedStory.id = currentStory.id;
+
+  // Update the story in the session
+  session.stories[session.currentStoryIndex] = updatedStory;
+
+  // Update the epic file
+  if (session.epic) {
+    session.epic.stories = session.stories;
+    const fs = require('fs');
+    fs.writeFileSync(
+      `./epics/${session.epic.id}.json`,
+      JSON.stringify(session.epic, null, 2)
+    );
+  }
+
+  const storyNum = session.currentStoryIndex + 1;
+  const criteria = updatedStory.acceptance_criteria.map(c => `   - ${c}`).join('\n');
+
+  await client.chat.postMessage({
+    channel: session.channelId,
+    thread_ts: threadTs,
+    text: `✅ Updated Story #${storyNum}: ${updatedStory.title}\n\n   ${updatedStory.story}\n\nAcceptance Criteria:\n${criteria}\n\n💡 Anything else?\n\nCommands: "next" | "prev" | "back" | or describe more changes`
+  });
+}
 
 async function handleMessage(session, text, threadTs, client) {
   try {
     // State machine for questions
     if (session.state === 'Q1') {
-      session.answers.users = text;
+      const cached = answerCache.get(session.userId);
+
+      // Handle "same" to reuse cached answer
+      if (text.trim().toLowerCase() === 'same' && cached && cached.users) {
+        session.answers.users = cached.users;
+      } else {
+        session.answers.users = text;
+      }
+
       session.state = 'Q2';
-      await client.chat.postMessage({
-        channel: session.channelId,
-        thread_ts: threadTs,
-        text: 'Q2: What problem does it solve?'
-      });
+
+      // Check for cached Q2 answer
+      if (cached && cached.problem) {
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: `Q2: What problem does it solve?\n\nPrevious answer: "${cached.problem}"\n\nType \`same\` to reuse, or provide a new answer.`
+        });
+      } else {
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: 'Q2: What problem does it solve?'
+        });
+      }
     } else if (session.state === 'Q2') {
-      session.answers.problem = text;
+      const cached = answerCache.get(session.userId);
+
+      // Handle "same" to reuse cached answer
+      if (text.trim().toLowerCase() === 'same' && cached && cached.problem) {
+        session.answers.problem = cached.problem;
+      } else {
+        session.answers.problem = text;
+      }
+
       session.state = 'Q3';
-      await client.chat.postMessage({
-        channel: session.channelId,
-        thread_ts: threadTs,
-        text: 'Q3: Tech stack? (e.g., "React, Node, Postgres")'
-      });
+
+      // Check for cached Q3 answer
+      if (cached && cached.techStack) {
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: `Q3: Tech stack?\n\nPrevious answer: "${cached.techStack}"\n\nType \`same\` to reuse, or provide a new answer.`
+        });
+      } else {
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: 'Q3: Tech stack? (e.g., "React, Node, Postgres")'
+        });
+      }
     } else if (session.state === 'Q3') {
-      session.answers.techStack = text;
+      const cached = answerCache.get(session.userId);
+
+      // Handle "same" to reuse cached answer
+      if (text.trim().toLowerCase() === 'same' && cached && cached.techStack) {
+        session.answers.techStack = cached.techStack;
+      } else {
+        session.answers.techStack = text;
+      }
+
+      // Cache the answers for this user
+      answerCache.set(session.userId, {
+        users: session.answers.users,
+        problem: session.answers.problem,
+        techStack: session.answers.techStack
+      });
+
       session.state = 'GENERATING';
 
       await client.chat.postMessage({
@@ -166,6 +514,13 @@ async function handleMessage(session, text, threadTs, client) {
         thread_ts: threadTs,
         text: 'Generating stories...'
       });
+
+      // Fetch README from GitHub for context
+      const { fetchReadme } = require('./github');
+      const readme = await fetchReadme();
+      if (readme) {
+        session.repoContext = readme;
+      }
 
       // Call Claude to generate stories
       const { generateStories } = require('./claude');
@@ -178,12 +533,34 @@ async function handleMessage(session, text, threadTs, client) {
       await client.chat.postMessage({
         channel: session.channelId,
         thread_ts: threadTs,
-        text: `✅ Generated ${stories.length} stories:\n\n${storyText}\n\nLook good? [Y/n]`
+        text: `✅ Generated ${stories.length} stories:\n\n${storyText}\n\nWhat's next?\n\nType \`review\` to run quality review, \`refine\` for interactive refinement, or \`Y\` to create GitHub issues.`
       });
     } else if (session.state === 'APPROVAL') {
       if (text.toLowerCase().startsWith('y')) {
+        // Create GitHub issues directly (skip review)
+        const epic = session.epic || saveEpic(session);
+
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: 'Creating GitHub issues...'
+        });
+
+        const { createIssues } = require('./github');
+        const result = await createIssues(epic);
+
+        const storyList = result.stories.map(i => `- #${i.number}: ${i.title}`).join('\n');
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: `✅ Created epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+        });
+
+        sessions.delete(threadTs);
+
+      } else if (text.toLowerCase() === 'review') {
         // Save epic and start review
-        const epic = saveEpic(session);
+        const epic = session.epic || saveEpic(session);
         session.state = 'REVIEWING';
 
         await client.chat.postMessage({
@@ -195,8 +572,13 @@ async function handleMessage(session, text, threadTs, client) {
         // Run review immediately
         await runReview(epic, threadTs, client, session.channelId);
 
+      } else if (text.toLowerCase() === 'refine') {
+        // Save epic first, then enter interactive mode
+        saveEpic(session);
+        session.state = 'INTERACTIVE_MODE';
+        await showStoryMenu(session, threadTs, client);
       } else {
-        // User wants changes
+        // User wants changes via bulk refinement
         session.state = 'REFINING';
         await client.chat.postMessage({
           channel: session.channelId,
@@ -227,8 +609,78 @@ async function handleMessage(session, text, threadTs, client) {
         text: `✅ Updated stories:\n\n${storyText}\n\nLook good? [Y/n]`
       });
     } else if (session.state === 'REVIEW_APPROVAL') {
-      if (text.toLowerCase().startsWith('y')) {
-        // Create GitHub issues
+      const trimmedText = text.trim().toLowerCase();
+
+      // Check if user wants to address review issues
+      if (trimmedText === 'all' || /^\d+(?:\s*,\s*\d+)*$/.test(trimmedText)) {
+        // User wants to address all or specific issues
+        let issuesToAddress = [];
+
+        if (trimmedText === 'all') {
+          issuesToAddress = session.reviewIssues || [];
+        } else {
+          // Parse issue numbers (e.g., "1, 2, 4")
+          const selectedNumbers = trimmedText.split(',').map(n => parseInt(n.trim()));
+          const reviewIssues = session.reviewIssues || [];
+          issuesToAddress = reviewIssues.filter(issue => selectedNumbers.includes(issue.number));
+        }
+
+        if (issuesToAddress.length === 0) {
+          await client.chat.postMessage({
+            channel: session.channelId,
+            thread_ts: threadTs,
+            text: '❌ No valid issues selected. Please try again or type `Y` to create GitHub issues as-is.'
+          });
+          return;
+        }
+
+        // Build feedback string from selected issues
+        const issuesList = issuesToAddress.map(issue => `- ${issue.text}`).join('\n');
+        session.feedback = `Address the following issues from the review:\n${issuesList}`;
+
+        session.state = 'REFINING';
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: `Addressing ${issuesToAddress.length} issue(s)...`
+        });
+
+        // Trigger refinement with the selected issues
+        const { refineStories } = require('./claude');
+        const updatedStories = await refineStories(session);
+        session.stories = updatedStories;
+
+        // Update epic
+        if (session.epic) {
+          session.epic.stories = updatedStories;
+          const fs = require('fs');
+          fs.writeFileSync(
+            `./epics/${session.epic.id}.json`,
+            JSON.stringify(session.epic, null, 2)
+          );
+        }
+
+        session.state = 'REVIEW_APPROVAL';
+        const storyText = formatStories(updatedStories);
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: `✅ Updated stories:\n\n${storyText}\n\nCreate GitHub issues? [Y/n/refine]`
+        });
+
+      } else if (trimmedText.startsWith('y')) {
+        // Check if this is an existing epic
+        if (session.isExistingEpic) {
+          await client.chat.postMessage({
+            channel: session.channelId,
+            thread_ts: threadTs,
+            text: `✅ Epic updated and saved to epics/${session.epic.id}.json\n\n💡 This epic was loaded from an existing file. If you want to update GitHub issues, use \`/delete-epic\` to close the old issues, then create a new epic with \`/story\`.`
+          });
+          sessions.delete(threadTs);
+          return;
+        }
+
+        // Create GitHub issues for new epics
         await client.chat.postMessage({
           channel: session.channelId,
           thread_ts: threadTs,
@@ -246,6 +698,10 @@ async function handleMessage(session, text, threadTs, client) {
         });
 
         sessions.delete(threadTs);
+      } else if (trimmedText === 'refine') {
+        // User wants interactive refinement mode
+        session.state = 'INTERACTIVE_MODE';
+        await showStoryMenu(session, threadTs, client);
       } else {
         // User wants more changes - back to refining
         session.state = 'REFINING';
@@ -268,6 +724,10 @@ async function handleMessage(session, text, threadTs, client) {
           });
         }
       }
+    } else if (session.state === 'INTERACTIVE_MODE') {
+      await handleInteractiveCommand(session, text, threadTs, client);
+    } else if (session.state === 'STORY_FOCUSED') {
+      await handleStoryFocused(session, text, threadTs, client);
     } else if (session.state === 'DELETE_CONFIRMATION') {
       if (text.toLowerCase().startsWith('y')) {
         // User confirmed deletion
@@ -277,27 +737,25 @@ async function handleMessage(session, text, threadTs, client) {
           text: `Deleting epic #${session.epicNumber}...`
         });
 
-        const { deleteEpic } = require('./github');
-        const result = await deleteEpic(session.epicNumber);
+        try {
+          const { deleteEpic } = require('./github');
+          console.log(`Attempting to delete epic #${session.epicNumber}`);
+          const result = await deleteEpic(session.epicNumber);
+          console.log(`Delete result:`, result);
 
-        // Also delete local epic file if it exists
-        const fs = require('fs');
-        if (fs.existsSync('./epics')) {
-          const epicFiles = fs.readdirSync('./epics').filter(f => f.endsWith('.json'));
-          for (const file of epicFiles) {
-            const epicData = JSON.parse(fs.readFileSync(`./epics/${file}`, 'utf8'));
-            if (session.epicTitle.includes(epicData.id)) {
-              fs.unlinkSync(`./epics/${file}`);
-              break;
-            }
-          }
+          await client.chat.postMessage({
+            channel: session.channelId,
+            thread_ts: threadTs,
+            text: `✅ Closed epic #${session.epicNumber} and ${result.storiesClosed} story issues on GitHub.\n\n💡 The local epic JSON file was kept in the \`epics/\` folder. You can restore it later using \`/review-epic\` if needed.`
+          });
+        } catch (error) {
+          console.error('Error deleting epic:', error);
+          await client.chat.postMessage({
+            channel: session.channelId,
+            thread_ts: threadTs,
+            text: `❌ Error deleting epic: ${error.message}\n\nPlease check the logs for details.`
+          });
         }
-
-        await client.chat.postMessage({
-          channel: session.channelId,
-          thread_ts: threadTs,
-          text: `✅ Deleted epic #${session.epicNumber} and closed ${result.storiesClosed} story issues.`
-        });
 
         sessions.delete(threadTs);
       } else {
@@ -322,9 +780,10 @@ async function handleMessage(session, text, threadTs, client) {
 }
 
 function formatStories(stories) {
+  // TODO: Add prettier formatting with Slack Block Kit for better visual presentation
   return stories.map((s, i) => {
     const criteria = s.acceptance_criteria.map(c => `   - ${c}`).join('\n');
-    return `${i + 1}. ${s.title}\n   ${s.story}\n${criteria}`;
+    return `${i + 1}. ${s.title}\n   ${s.story}\n   Acceptance Criteria:\n${criteria}`;
   }).join('\n\n');
 }
 
@@ -359,27 +818,64 @@ async function runReview(epic, threadTs, client, channelId) {
     const { reviewEpic } = require('./claude');
     const review = await reviewEpic(epic);
 
-    await client.chat.postMessage({
-      channel: channelId,
-      thread_ts: threadTs,
-      text: `🔍 Review complete!\n\n${review}\n\nCreate GitHub issues? [Y/n]`
-    });
+    // Parse issues from review (supports both numbered and bullet point formats)
+    const issuesSection = review.match(/⚠️ Issues:\n((?:(?:\d+\.|-).*\n?)+)/);
+    const reviewIssues = [];
+    if (issuesSection) {
+      const issueLines = issuesSection[1].trim().split('\n');
+      issueLines.forEach((line) => {
+        // Match either "1. text" or "- text"
+        const numberedMatch = line.match(/^(\d+)\.\s*(.+)/);
+        const bulletMatch = line.match(/^-\s*(.+)/);
+
+        if (numberedMatch) {
+          const issueNumber = parseInt(numberedMatch[1]);
+          const issueText = numberedMatch[2].trim();
+          if (issueText) {
+            reviewIssues.push({ number: issueNumber, text: issueText });
+          }
+        } else if (bulletMatch) {
+          const issueText = bulletMatch[1].trim();
+          if (issueText) {
+            reviewIssues.push({ number: reviewIssues.length + 1, text: issueText });
+          }
+        }
+      });
+    }
 
     const session = sessions.get(threadTs);
     if (session) {
       session.state = 'REVIEW_APPROVAL';
+      session.hasBeenReviewed = true;
+      session.reviewText = review;
+      session.reviewIssues = reviewIssues;
     }
+
+    // Build prompt based on whether issues were found
+    let promptText = `🔍 Review complete!\n\n${review}\n\n`;
+    if (reviewIssues.length > 0) {
+      promptText += `Would you like me to address these issues?\n\nType \`all\` to address all issues, or type issue numbers (e.g., \`1, 2, 4\`) to address specific ones.\n\nOr: \`Y\` to create GitHub issues as-is, \`refine\` for interactive mode.`;
+    } else {
+      promptText += `Create GitHub issues? [Y/n/refine]`;
+    }
+
+    await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: promptText
+    });
   } catch (error) {
     console.error('Error in runReview:', error);
     await client.chat.postMessage({
       channel: channelId,
       thread_ts: threadTs,
-      text: `❌ Review error: ${error.message}\n\nCreate GitHub issues anyway? [Y/n]`
+      text: `❌ Review error: ${error.message}\n\nCreate GitHub issues anyway? [Y/n/refine]`
     });
 
     const session = sessions.get(threadTs);
     if (session) {
       session.state = 'REVIEW_APPROVAL';
+      session.hasBeenReviewed = true;
     }
   }
 }

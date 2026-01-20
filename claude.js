@@ -6,6 +6,8 @@ const client = new Anthropic({
 });
 
 async function generateStories(session) {
+  // TODO: Add retry logic for API failures
+  // TODO: Track token usage and costs per epic
   const prompt = prompts.storyGeneration(session);
 
   const response = await client.messages.create({
@@ -53,6 +55,8 @@ async function reviewEpic(epic) {
 }
 
 function parseStories(text) {
+  // TODO: Improve parsing to handle edge cases and malformed responses
+  // TODO: Add validation to ensure all stories have required fields
   // Simple parsing - look for numbered stories
   const stories = [];
   const lines = text.split('\n');
@@ -117,4 +121,79 @@ function parseStories(text) {
   return stories;
 }
 
-module.exports = { generateStories, refineStories, reviewEpic };
+async function refineSingleStory(story, userRequest, epicContext) {
+  const prompt = prompts.singleStoryRefinement(story, userRequest, epicContext);
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-5-20250929',
+    max_tokens: 2048,
+    messages: [{
+      role: 'user',
+      content: prompt
+    }]
+  });
+
+  const text = response.content[0].text;
+  return parseSingleStory(text);
+}
+
+function parseSingleStory(text) {
+  const lines = text.split('\n');
+  const story = {
+    title: '',
+    story: '',
+    acceptance_criteria: []
+  };
+
+  let inAcceptanceCriteria = false;
+  let collectingStory = false;
+
+  for (let line of lines) {
+    // Match "Title: ..."
+    const titleMatch = line.match(/^Title:\s*(.+)/i);
+    if (titleMatch) {
+      story.title = titleMatch[1].trim();
+      continue;
+    }
+
+    // Match "Story: ..." or "As a..."
+    const storyMatch = line.match(/^Story:\s*(.+)/i);
+    if (storyMatch) {
+      story.story = storyMatch[1].trim();
+      collectingStory = true;
+      continue;
+    }
+
+    // Match "As a..." pattern (in case it's on its own line)
+    if (line.trim().startsWith('As a') || line.trim().startsWith('As an')) {
+      story.story = line.trim();
+      collectingStory = true;
+      continue;
+    }
+
+    // Continue collecting story (for "I want..." and "so that..." lines)
+    if (collectingStory && line.trim().length > 0 && !line.includes('Acceptance') && !line.trim().startsWith('-')) {
+      story.story += ' ' + line.trim();
+      continue;
+    }
+
+    // Match acceptance criteria header
+    if (line.match(/^Acceptance Criteria:/i)) {
+      inAcceptanceCriteria = true;
+      collectingStory = false;
+      continue;
+    }
+
+    // Match criteria items: "- ..."
+    if (inAcceptanceCriteria) {
+      const criteriaMatch = line.match(/^\s*-\s*(?:\[\s*\]\s*)?(.+)/);
+      if (criteriaMatch) {
+        story.acceptance_criteria.push(criteriaMatch[1].trim());
+      }
+    }
+  }
+
+  return story;
+}
+
+module.exports = { generateStories, refineStories, reviewEpic, refineSingleStory };

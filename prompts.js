@@ -1,12 +1,16 @@
 function storyGeneration(session) {
+  const repoContextSection = session.repoContext
+    ? `\n\nRepository Context (from README.md):\n${session.repoContext.substring(0, 3000)}\n`
+    : '';
+
   return `You are helping students create user stories for their project.
 
 Epic: ${session.description}
 Users: ${session.answers.users}
 Problem: ${session.answers.problem}
-Tech Stack: ${session.answers.techStack}
+Tech Stack: ${session.answers.techStack}${repoContextSection}
 
-Generate 4-6 user stories that break down this epic.
+Generate 4-6 user stories that break down this epic. Use the repository context above to ensure stories align with the existing project structure, conventions, and goals.
 
 Format each story exactly like this:
 1. [Title]
@@ -21,8 +25,8 @@ Keep stories small with 1-2 suggested acceptance criteria each. Make acceptance 
 
 function storyRefinement(session) {
   const existingStories = session.stories.map((s, i) =>
-    `${i + 1}. ${s.title}\n   ${s.story}`
-  ).join('\n');
+    `${i + 1}. ${s.title}\n   ${s.story}\n   Acceptance Criteria:\n${s.acceptance_criteria.map(c => `   - ${c}`).join('\n')}`
+  ).join('\n\n');
 
   return `You previously generated these stories:
 
@@ -36,7 +40,7 @@ Generate the updated list of stories in the same format:
    - [acceptance criterion 1]
    - [acceptance criterion 2]
 
-Keep stories small with 1-2 suggested acceptance criteria each.`;
+Keep stories small with 1-2 suggested acceptance criteria each. Make sure stories are focused, testable, and address all the requested changes.`;
 }
 
 function review(epic) {
@@ -55,10 +59,40 @@ Format your response as:
 - [what's good]
 
 ⚠️ Issues:
-- [issue 1]
-- [issue 2]
+1. [issue 1]
+2. [issue 2]
+3. [issue 3]
+
+IMPORTANT: Number the issues (1, 2, 3, etc.) instead of using bullet points (-).
 
 Keep it under 10 lines total.`;
 }
 
-module.exports = { storyGeneration, storyRefinement, review };
+function singleStoryRefinement(story, userRequest, epicContext) {
+  return `You are helping refine a user story.
+
+Epic context: ${epicContext.description}
+Users: ${epicContext.users}
+Problem: ${epicContext.problem}
+Tech Stack: ${epicContext.techStack}
+
+Current story:
+Title: ${story.title}
+Story: ${story.story}
+Acceptance Criteria:
+${story.acceptance_criteria.map(c => `- ${c}`).join('\n')}
+
+User request: "${userRequest}"
+
+Provide the updated story in this exact format:
+Title: [updated title]
+Story: [As a user, I want to... so that...]
+Acceptance Criteria:
+- [criterion 1]
+- [criterion 2]
+- [criterion 3]
+
+Keep it focused and testable.`;
+}
+
+module.exports = { storyGeneration, storyRefinement, review, singleStoryRefinement };
