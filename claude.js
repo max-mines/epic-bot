@@ -10,6 +10,7 @@ async function generateStories(session) {
   // TODO: Track token usage and costs per epic
   const prompt = prompts.storyGeneration(session);
 
+  console.log('[generateStories] Calling Claude API...');
   const response = await client.messages.create({
     model: 'claude-sonnet-4-5-20250929',
     max_tokens: 4096,
@@ -20,12 +21,18 @@ async function generateStories(session) {
   });
 
   const text = response.content[0].text;
-  return parseStories(text);
+  console.log('[generateStories] Claude response length:', text.length);
+  console.log('[generateStories] Claude response (first 500 chars):', text.substring(0, 500));
+
+  const stories = parseStories(text);
+  console.log('[generateStories] Parsed', stories.length, 'stories');
+  return stories;
 }
 
 async function refineStories(session) {
   const prompt = prompts.storyRefinement(session);
 
+  console.log('[refineStories] Calling Claude API...');
   const response = await client.messages.create({
     model: 'claude-sonnet-4-5-20250929',
     max_tokens: 4096,
@@ -36,7 +43,12 @@ async function refineStories(session) {
   });
 
   const text = response.content[0].text;
-  return parseStories(text);
+  console.log('[refineStories] Claude response length:', text.length);
+  console.log('[refineStories] Claude response (first 500 chars):', text.substring(0, 500));
+
+  const stories = parseStories(text);
+  console.log('[refineStories] Parsed', stories.length, 'stories');
+  return stories;
 }
 
 async function reviewEpic(epic) {
@@ -57,24 +69,32 @@ async function reviewEpic(epic) {
 function parseStories(text) {
   // TODO: Improve parsing to handle edge cases and malformed responses
   // TODO: Add validation to ensure all stories have required fields
+  console.log('[parseStories] Starting parse, text length:', text.length);
+
   // Simple parsing - look for numbered stories
   const stories = [];
   const lines = text.split('\n');
+  console.log('[parseStories] Total lines:', lines.length);
 
   let currentStory = null;
   let inAcceptanceCriteria = false;
   let collectingStory = false;
 
-  for (let line of lines) {
-    // Match story number: "1. Title" or "**1. Title**"
-    const titleMatch = line.match(/^\*?\*?(\d+)\.\s*\*?\*?(.+)/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Match story number in multiple formats:
+    // "1. Title" or "**1. Title**" or "## 1. Title" or "[1. Title]"
+    const titleMatch = line.match(/^(?:##\s*)?\*?\*?\[?(\d+)\.\s*\]?\*?\*?(.+)/);
     if (titleMatch) {
+      console.log('[parseStories] Found story title at line', i + ':', line);
       if (currentStory) {
+        console.log('[parseStories] Pushing previous story:', currentStory.id);
         stories.push(currentStory);
       }
       currentStory = {
         id: `story-${String(titleMatch[1]).padStart(3, '0')}`,
-        title: titleMatch[2].replace(/\*\*/g, '').trim(),
+        title: titleMatch[2].replace(/\*\*/g, '').replace(/^[\[\]]/g, '').trim(),
         story: '',
         acceptance_criteria: []
       };
@@ -98,7 +118,7 @@ function parseStories(text) {
       continue;
     }
 
-    // Match acceptance criteria
+    // Match acceptance criteria header (optional - we can also collect criteria without it)
     if (line.includes('Acceptance') || line.includes('acceptance')) {
       inAcceptanceCriteria = true;
       collectingStory = false;
@@ -106,16 +126,27 @@ function parseStories(text) {
     }
 
     // Match criteria items: "- [ ] ..." or just "- ..."
-    if (inAcceptanceCriteria && currentStory) {
+    // If we have a current story and see a dash line, treat it as acceptance criteria
+    if (currentStory) {
       const criteriaMatch = line.match(/^\s*-\s*(?:\[\s*\]\s*)?(.+)/);
       if (criteriaMatch) {
+        // Once we see a criteria item, we're in acceptance criteria mode
+        inAcceptanceCriteria = true;
+        collectingStory = false;
         currentStory.acceptance_criteria.push(criteriaMatch[1].trim());
       }
     }
   }
 
   if (currentStory) {
+    console.log('[parseStories] Pushing final story:', currentStory.id);
     stories.push(currentStory);
+  }
+
+  console.log('[parseStories] Finished parsing. Total stories:', stories.length);
+  if (stories.length === 0) {
+    console.error('[parseStories] WARNING: No stories parsed! First 1000 chars of text:');
+    console.error(text.substring(0, 1000));
   }
 
   return stories;

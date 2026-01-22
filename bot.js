@@ -2,7 +2,7 @@ require('dotenv').config();
 const { App } = require('@slack/bolt');
 const fs = require('fs');
 
-const VERSION = 'v0.2.1';
+const VERSION = 'v0.3.0';
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -257,13 +257,34 @@ async function handleInteractiveCommand(session, text, threadTs, client) {
   if (trimmed === 'done') {
     // Check if this is an existing epic (loaded via /review-epic)
     if (session.isExistingEpic) {
-      // Save the updated epic and exit - don't create new GitHub issues
-      await client.chat.postMessage({
-        channel: session.channelId,
-        thread_ts: threadTs,
-        text: `✅ Epic updated and saved to epics/${session.epic.id}.json\n\n💡 This epic was loaded from an existing file. If you want to update GitHub issues, use \`/delete-epic\` to close the old issues, then create a new epic with \`/story\`.`
-      });
-      sessions.delete(threadTs);
+      // Check if epic has GitHub issue numbers (meaning it was previously published)
+      if (session.epic.github_epic_number) {
+        // Update existing GitHub issues
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: 'Updating GitHub issues...'
+        });
+
+        const { updateIssues } = require('./github');
+        const result = await updateIssues(session.epic);
+
+        const storyList = result.stories.map(i => `- #${i.number}: ${i.title}`).join('\n');
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: `✅ Updated epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+        });
+
+        sessions.delete(threadTs);
+      } else {
+        // Epic exists locally but was never published to GitHub
+        await client.chat.postMessage({
+          channel: session.channelId,
+          thread_ts: threadTs,
+          text: `✅ Epic updated and saved to epics/${session.epic.id}.json\n\n💡 This epic has not been published to GitHub yet. Type \`Y\` to create GitHub issues, or type \`done\` to exit without publishing.`
+        });
+      }
       return;
     }
 
@@ -670,17 +691,29 @@ async function handleMessage(session, text, threadTs, client) {
 
       } else if (trimmedText.startsWith('y')) {
         // Check if this is an existing epic
-        if (session.isExistingEpic) {
+        if (session.isExistingEpic && session.epic.github_epic_number) {
+          // Update existing GitHub issues
           await client.chat.postMessage({
             channel: session.channelId,
             thread_ts: threadTs,
-            text: `✅ Epic updated and saved to epics/${session.epic.id}.json\n\n💡 This epic was loaded from an existing file. If you want to update GitHub issues, use \`/delete-epic\` to close the old issues, then create a new epic with \`/story\`.`
+            text: 'Updating GitHub issues...'
           });
+
+          const { updateIssues } = require('./github');
+          const result = await updateIssues(session.epic);
+
+          const storyList = result.stories.map(i => `- #${i.number}: ${i.title}`).join('\n');
+          await client.chat.postMessage({
+            channel: session.channelId,
+            thread_ts: threadTs,
+            text: `✅ Updated epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+          });
+
           sessions.delete(threadTs);
           return;
         }
 
-        // Create GitHub issues for new epics
+        // Create GitHub issues for new epics or existing epics without GitHub issue numbers
         await client.chat.postMessage({
           channel: session.channelId,
           thread_ts: threadTs,

@@ -49,11 +49,25 @@ async function createIssues(epic) {
   console.log('[createIssues] Creating story issues...');
   for (const story of epic.stories) {
     console.log('[createIssues] Creating story issue:', story.id);
+
+    // Format acceptance criteria for initial creation
+    const criteria = story.acceptance_criteria
+      .map(c => `- [ ] ${c}`)
+      .join('\n');
+
+    const initialBody = `${story.story}
+
+## Acceptance Criteria
+${criteria}
+
+---
+*Note: Epic issue will be linked once created*`;
+
     const response = await octokit.issues.create({
       owner,
       repo,
       title: `${story.id}: ${story.title}`,
-      body: 'Temporary placeholder - will be updated', // Temporary body
+      body: initialBody,
       labels: ['user-story', 'epic-bot']
     });
 
@@ -101,6 +115,24 @@ async function createIssues(epic) {
   }
 
   console.log('[createIssues] All issues created successfully');
+
+  // Save GitHub issue numbers back to epic JSON
+  console.log('[createIssues] Saving GitHub issue numbers to epic JSON...');
+  epic.github_epic_number = epicNumber;
+  epic.github_epic_url = epicUrl;
+  epic.stories = epic.stories.map((story, index) => ({
+    ...story,
+    github_issue_number: storyIssues[index].number,
+    github_issue_url: storyIssues[index].url
+  }));
+
+  const fs = require('fs');
+  fs.writeFileSync(
+    `./epics/${epic.id}.json`,
+    JSON.stringify(epic, null, 2)
+  );
+  console.log('[createIssues] Epic JSON updated with GitHub issue numbers');
+
   return {
     epic: {
       number: epicNumber,
@@ -115,7 +147,7 @@ function formatEpicBody(epic, storyIssues) {
   // TODO: Add epic description/context field for more detailed overview
   // TODO: Add estimated story points or complexity indicators
   const storyList = storyIssues
-    .map((s, i) => `${i + 1}. [${s.title}](#${s.number})`)
+    .map((s, i) => `${i + 1}. #${s.number} - ${s.title}`)
     .join('\n');
 
   return `## Overview
@@ -143,6 +175,76 @@ ${criteria}
 
 ---
 Part of epic #${epicNumber}`;
+}
+
+async function updateIssues(epic) {
+  console.log('[updateIssues] Function called with epic:', epic.id);
+  console.log('[updateIssues] Epic GitHub number:', epic.github_epic_number);
+
+  if (!epic.github_epic_number) {
+    throw new Error('Epic does not have a GitHub issue number. Cannot update issues.');
+  }
+
+  const epicNumber = epic.github_epic_number;
+  const issues = [];
+
+  // Update story issues
+  console.log('[updateIssues] Updating story issues...');
+  for (const story of epic.stories) {
+    if (!story.github_issue_number) {
+      console.log('[updateIssues] Story', story.id, 'does not have a GitHub issue number, skipping');
+      continue;
+    }
+
+    console.log('[updateIssues] Updating story issue #' + story.github_issue_number);
+    const body = formatIssueBody(story, epic, epicNumber);
+    const response = await octokit.issues.update({
+      owner,
+      repo,
+      issue_number: story.github_issue_number,
+      title: `${story.id}: ${story.title}`,
+      body
+    });
+
+    console.log('[updateIssues] Story issue #' + story.github_issue_number + ' updated successfully');
+    issues.push({
+      number: story.github_issue_number,
+      title: story.title,
+      url: response.data.html_url
+    });
+  }
+
+  // Update epic issue
+  console.log('[updateIssues] Updating epic issue #' + epicNumber);
+  const storyIssues = epic.stories
+    .filter(s => s.github_issue_number)
+    .map(s => ({
+      number: s.github_issue_number,
+      title: s.title,
+      url: s.github_issue_url
+    }));
+
+  const epicBody = formatEpicBody(epic, storyIssues);
+  const epicResponse = await octokit.issues.update({
+    owner,
+    repo,
+    issue_number: epicNumber,
+    title: `${epic.id}: ${epic.title}`,
+    body: epicBody
+  });
+
+  const epicUrl = epicResponse.data.html_url;
+  console.log('[updateIssues] Epic issue #' + epicNumber + ' updated successfully');
+
+  console.log('[updateIssues] All issues updated successfully');
+  return {
+    epic: {
+      number: epicNumber,
+      title: epic.title,
+      url: epicUrl
+    },
+    stories: issues
+  };
 }
 
 async function deleteEpic(epicIssueNumber) {
@@ -225,4 +327,4 @@ async function deleteEpic(epicIssueNumber) {
   }
 }
 
-module.exports = { createIssues, deleteEpic, fetchReadme };
+module.exports = { createIssues, updateIssues, deleteEpic, fetchReadme };
