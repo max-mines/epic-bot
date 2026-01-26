@@ -9,6 +9,9 @@ const app = new App({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   socketMode: true,
   appToken: process.env.SLACK_APP_TOKEN,
+  socketModeOptions: {
+    logLevel: 'error' // Reduce noise from socket mode client
+  }
 });
 
 // In-memory session storage
@@ -925,6 +928,35 @@ setInterval(() => {
 }, 10 * 60 * 1000); // Check every 10 minutes
 
 (async () => {
-  await app.start();
-  console.log(`⚡️ Epic Bot ${VERSION} is running!`);
+  try {
+    await app.start();
+    console.log(`⚡️ Epic Bot ${VERSION} is running!`);
+  } catch (error) {
+    console.error('❌ Failed to start Epic Bot:', error.message);
+
+    // Check for common configuration issues
+    if (!process.env.SLACK_BOT_TOKEN) {
+      console.error('Missing SLACK_BOT_TOKEN in .env file');
+    }
+    if (!process.env.SLACK_APP_TOKEN) {
+      console.error('Missing SLACK_APP_TOKEN in .env file');
+    }
+    if (!process.env.SLACK_SIGNING_SECRET) {
+      console.error('Missing SLACK_SIGNING_SECRET in .env file');
+    }
+
+    console.error('\nPlease check your .env file and Slack app configuration.');
+    console.error('See README.md for setup instructions.');
+    process.exit(1);
+  }
 })();
+
+// Handle uncaught errors to prevent crashes
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled promise rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  // Don't exit - let the bot try to continue
+});
