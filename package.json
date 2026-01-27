@@ -1,6 +1,6 @@
 {
   "name": "epic-bot",
-  "version": "1.0.0",
+  "version": "0.4.0",
   "description": "Slack bot for creating epics and user stories",
   "main": "bot.js",
   "scripts": {

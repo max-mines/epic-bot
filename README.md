@@ -2,18 +2,32 @@
 
 A lightweight Slack bot that helps students create well-structured epics and user stories, then pushes them to GitHub as issues.
 
+## Why Epic Bot?
+
+Writing good user stories is hard. It takes time to break down large ideas into small, actionable chunks. Epic Bot streamlines this process by:
+
+-   **Guiding the process:** The bot asks simple questions to help you think through the problem you're solving.
+-   **Automating the tedious parts:** It generates user stories and acceptance criteria for you, so you can focus on the core functionality.
+-   **Providing a fresh perspective:** The AI-powered review helps you catch missing edge cases and improve the quality of your stories.
+-   **Integrating with your workflow:** By creating GitHub issues directly from Slack, it fits seamlessly into your development process.
+
 ## Features
 
-- **Interactive Epic Creation**: Answer 3 simple questions to generate 4-6 user stories with AI assistance
-- **Repository Context Awareness**: Automatically fetches your GitHub README to ensure stories align with existing project structure
-- **AI Quality Review**: Get actionable feedback on story quality, size, and completeness
-- **Bulk Refinement**: Address multiple review issues at once (e.g., "add acceptance criteria to all stories")
-- **Interactive Story Editor**: Navigate between stories and refine them individually with natural language
-- **GitHub Integration**: Automatically creates linked epic and story issues with proper formatting
-- **Answer Caching**: Type `same` to reuse previous answers for faster epic creation
-- **Epic Management**: Review existing epics, update GitHub issues, or delete entire epics
+-   **Interactive Epic Creation**: Answer 3 simple questions to generate 4-6 user stories with AI assistance
+-   **Repository Context Awareness**: Automatically fetches your GitHub README to ensure stories align with existing project structure
+-   **AI Quality Review**: Get actionable feedback on story quality, size, and completeness
+-   **Bulk Refinement**: Address multiple review issues at once (e.g., "add acceptance criteria to all stories")
+-   **Interactive Story Editor**: Navigate between stories and refine them individually with natural language
+-   **GitHub Integration**: Automatically creates linked epic and story issues with proper formatting
+-   **Answer Caching**: Type `same` to reuse previous answers for faster epic creation
+-   **Epic Management**: Review existing epics, update GitHub issues, or delete entire epics
 
 ## Quick Start
+
+### Prerequisites
+
+-   [Node.js](https://nodejs.org/) (v14 or higher)
+-   [npm](https://www.npmjs.com/)
 
 ### 1. Install Dependencies
 
@@ -23,27 +37,27 @@ npm install
 
 ### 2. Set Up Slack App
 
-1. Go to https://api.slack.com/apps
-2. Click "Create New App" → "From scratch"
-3. Name it "Epic Bot" and select your workspace
-4. Navigate to "OAuth & Permissions" and add these Bot Token Scopes:
-   - `commands`
-   - `chat:write`
-   - `im:write`
-   - `channels:history`
-   - `groups:history`
-   - `im:history`
-   - `mpim:history`
-5. Navigate to "Slash Commands" and create these commands:
-   - `/story` - Description: "Create an epic with user stories"
-   - `/review-epic` - Description: "Review an existing epic from saved file (provide epic ID)"
-   - `/delete-epic` - Description: "Delete an epic and its stories (provide issue number)"
-6. Navigate to "Socket Mode" and enable it
-   - Generate an App-Level Token with `connections:write` scope
-7. Navigate to "Event Subscriptions" and enable events
-   - Subscribe to bot events: `message.channels`, `message.im`, `message.groups`, `message.mpim`
-8. Install the app to your workspace
-9. Copy the tokens (you'll need them for `.env`)
+1.  Go to https://api.slack.com/apps
+2.  Click "Create New App" → "From scratch"
+3.  Name it "Epic Bot" and select your workspace
+4.  Navigate to "OAuth & Permissions" and add these Bot Token Scopes:
+    -   `commands`
+    -   `chat:write`
+    -   `im:write`
+    -   `channels:history`
+    -   `groups:history`
+    -   `im:history`
+    -   `mpim:history`
+5.  Navigate to "Slash Commands" and create these commands:
+    -   `/story` - Description: "Create an epic with user stories"
+    -   `/review-epic` - Description: "Review an existing epic from saved file (provide epic ID)"
+    -   `/delete-epic` - Description: "Delete an epic and its stories (provide issue number)"
+6.  Navigate to "Socket Mode" and enable it
+    -   Generate an App-Level Token with `connections:write` scope
+7.  Navigate to "Event Subscriptions" and enable events
+    -   Subscribe to bot events: `message.channels`, `message.im`, `message.groups`, `message.mpim`
+8.  Install the app to your workspace
+9.  Copy the tokens (you'll need them for `.env`)
 
 ### 3. Create `.env` File
 
@@ -54,6 +68,7 @@ cp .env.example .env
 ```
 
 Edit `.env`:
+
 ```bash
 # From Slack app settings
 SLACK_BOT_TOKEN=xoxb-...
@@ -81,260 +96,161 @@ You should see: `⚡️ Epic Bot v0.3.0 is running!`
 
 ### Creating an Epic
 
-1. **Start the epic** in Slack:
-   ```
-   /story Build a student dashboard
-   ```
+1.  **Start the epic** in Slack:
+    `/story Build a student dashboard`
 
-2. **Answer 3 questions** (or type `same` to reuse your previous answers):
-   - Q1: Who is this for? (e.g., "students", "instructors")
-   - Q2: What problem does it solve?
-   - Q3: Tech stack? (e.g., "React, Node, Postgres")
+2.  **Answer 3 questions** (or type `same` to reuse your previous answers):
+    -   Q1: Who is this for? (e.g., "students", "instructors")
+    -   Q2: What problem does it solve?
+    -   Q3: Tech stack? (e.g., "React, Node, Postgres")
 
-3. **AI generates 4-6 stories** with acceptance criteria:
-   - Automatically fetches your repo's README.md for context
-   - Stories align with your existing project structure
-   - Each story includes 1-2 suggested acceptance criteria
+3.  **AI generates 4-6 stories** with acceptance criteria:
+    -   Automatically fetches your repo's README.md for context
+    -   Stories align with your existing project structure
+    -   Each story includes 1-2 suggested acceptance criteria
 
-4. **Review and refine** (choose one):
-   - `review` - Run AI quality review (recommended for first-time epics)
-   - `refine` - Interactively edit individual stories
-   - `Y` - Create GitHub issues immediately (skip review)
+4.  **Review and refine** (choose one):
+    -   `review` - Run AI quality review (recommended for first-time epics)
+    -   `refine` - Interactively edit individual stories
+    -   `Y` - Create GitHub issues immediately (skip review)
 
-5. **Address review issues** (if you chose review):
-   ```
-   Bot: ⚠️ Issues:
-        1. Stories lack acceptance criteria
-        2. Missing error handling stories
-        3. Stories too large, should be split
+5.  **Address review issues** (if you chose review):
+    ```
+    Bot: ⚠️ Issues:
+         1. Stories lack acceptance criteria
+         2. Missing error handling stories
+         3. Stories too large, should be split
 
-        Type `all` to address all issues, or `1, 2` for specific ones
+         Type `all` to address all issues, or `1, 2` for specific ones
 
-   You: all
-   ```
-   - Bot refines all stories to address the issues
-   - Acceptance criteria are automatically added/improved
+    You: all
+    ```
+    -   Bot refines all stories to address the issues
+    -   Acceptance criteria are automatically added/improved
 
-6. **Finalize**:
-   - Type `Y` to create GitHub issues
-   - Type `refine` to make manual adjustments before publishing
+6.  **Finalize**:
+    -   Type `Y` to create GitHub issues
+    -   Type `refine` to make manual adjustments before publishing
 
 Done! Your epic and stories are now GitHub issues with:
-- Epic issue linking to all story issues
-- Story issues linking back to the epic
-- Acceptance criteria as checkboxes
-- Proper labels (`epic`, `user-story`, `epic-bot`)
 
-### Interactive Refinement Mode
+-   Epic issue linking to all story issues
+-   Story issues linking back to the epic
+-   Acceptance criteria as checkboxes
+-   Proper labels (`epic`, `user-story`, `epic-bot`)
 
-You can refine individual stories at two points:
-- After initial story generation (before review)
-- After the review (before creating GitHub issues)
+### Example Conversation
 
-1. Type `refine` when prompted
-2. Select a story by number (e.g., type `1` or `3`)
-3. Make changes using natural language:
-   - "add acceptance criteria for error handling"
-   - "change this to be for instructors instead"
-   - "add validation for email addresses"
-4. Navigate between stories:
-   - `next` - Move to the next story
-   - `prev` - Move to the previous story
-   - `back` - Return to story selection menu
-   - `overview` - See all stories again
-5. When finished, type `done` to create GitHub issues
-
-**Example conversation:**
 ```
-Bot: Create GitHub issues? [Y/n/refine]
-You: refine
+You: /story Build a student dashboard
 
-Bot: Select a story to refine:
-     1. User Login
-     2. Dashboard View
-     3. Data Export
+Bot: 📝 Creating epic: "Build a student dashboard"
 
-You: 3
+     I'll ask 3 quick questions.
 
-Bot: Story #3: Data Export
-     As a user, I want to export my data...
+     Q1: Who is this for? (e.g., "students", "instructors and students")
 
-You: add acceptance criteria for error handling
+You: students
 
-Bot: ✅ Updated Story #3: Data Export
-     ...
-     - Show error message if export fails
-     - Disable export button during processing
+Bot: Q2: What problem does it solve?
 
-You: next
+You: Students need a single place to see all their assignments and due dates.
 
-Bot: Story #4: Profile Settings
-     ...
+Bot: Q3: Tech stack? (e.g., "React, Node, Postgres")
+
+You: React, Node, and Postgres
+
+Bot: Generating stories...
+
+Bot: ✅ Generated 4 stories:
+
+     1. View Assignments
+        As a student, I want to see a list of all my assignments,
+        so that I can track my upcoming work.
+        Acceptance Criteria:
+        - Display assignment title
+        - Display assignment due date
+        - Sort assignments by due date
+
+     ... (3 more stories) ...
+
+     What's next?
+
+     Type `review` to run quality review, `refine` for interactive refinement, or `Y` to create GitHub issues.
 ```
-
-### Deleting an Epic
-
-To delete an epic and all its associated stories:
-
-1. Run the command:
-   ```
-   /delete-epic 42
-   ```
-
-2. The bot will show you the epic and all stories that will be closed:
-   ```
-   ⚠️ Confirm deletion of epic #42: Student Dashboard
-
-   Stories to be closed (5):
-   - #43: View all assignments
-   - #44: Filter by course
-   ...
-
-   Type Y to confirm deletion, or anything else to cancel.
-   ```
-
-3. Reply `Y` to confirm or anything else to cancel
-
-This will:
-- Close the epic issue (#42)
-- Close all associated user story issues
-- **Keep the local epic JSON file** in the `epics/` folder
-
-**Notes:**
-- This closes issues rather than deleting them (GitHub doesn't allow permanent deletion via API)
-- The local JSON file is preserved so you can restore the epic later using `/review-epic` if needed
-
-### Re-reviewing and Updating an Existing Epic
-
-You can re-run the review process on any epic that was previously saved:
-
-1. **Find the epic ID** from the `epics/` folder:
-   ```
-   ls epics/
-   # Shows: epic-2026-01-20T03-22-56.json
-   ```
-
-2. **Load and review the epic**:
-   ```
-   /review-epic epic-2026-01-20T03-22-56
-   ```
-
-3. **Review and refine**:
-   ```
-   Bot: 📝 Reviewing epic: "Build a student dashboard"
-
-        Running review...
-
-        🔍 Review complete!
-
-        ✅ Good:
-        - Clear user value in all stories
-
-        ⚠️ Issues:
-        1. Stories lack acceptance criteria
-        2. Missing error handling stories
-        3. Stories too large, should be split
-
-        Would you like me to address these issues?
-        Type `all` to address all issues, or `1, 2` for specific ones
-
-   You: all
-   ```
-
-4. **Update GitHub issues** (if epic was already published):
-   ```
-   You: Y
-
-   Bot: Updating GitHub issues...
-
-        ✅ Updated epic #42: Build a student dashboard
-
-        Stories:
-        - #43: User Login
-        - #44: Dashboard View
-        ...
-
-        Done! 🎉
-   ```
-
-**Use cases:**
-- Add acceptance criteria to existing stories (common after review)
-- Split large stories that were flagged in review
-- Add missing error handling or edge case stories
-- Update GitHub issues after refining stories locally
-
-### Quick Testing Mode
-
-For faster testing and iteration, the bot caches your previous answers per user:
-
-1. The first time you run `/story`, you'll answer all 3 questions normally
-2. On subsequent runs, each question shows your previous answer:
-   ```
-   Q1: Who is this for?
-
-   Previous answer: "students"
-
-   Type `same` to reuse, or provide a new answer.
-   ```
-3. Type `same` to skip typing the same answer again, or provide a new answer to override
-4. Mix and match - use `same` for some questions and new answers for others
-
-This is especially useful when:
-- Testing different epic descriptions with the same context
-- Iterating on story generation
-- Quickly creating multiple related epics
 
 ## How It Works
 
 ### Story Generation Flow
 
-1. **Context Collection**: Bot asks 3 questions and fetches README.md
-2. **AI Generation**: Claude Sonnet 4.5 generates stories using prompt templates
-3. **Parsing**: Response is parsed into structured story objects with:
-   - Story ID (e.g., `story-001`)
-   - Title
-   - User story ("As a... I want... so that...")
-   - Acceptance criteria array
+1.  **Context Collection**: Bot asks 3 questions and fetches README.md
+2.  **AI Generation**: Claude 3 Sonnet generates stories using prompt templates
+3.  **Parsing**: Response is parsed into structured story objects with:
+    -   Story ID (e.g., `story-001`)
+    -   Title
+    -   User story ("As a... I want... so that...")
+    -   Acceptance criteria array
 
 ### Review and Refinement
 
-- **Review**: Claude analyzes all stories for quality issues
-- **Bulk Refinement**: Claude addresses selected issues across all stories
-- **Interactive Refinement**: Users edit individual stories with natural language
-- **Parsing Flexibility**: Parser handles multiple formats (with/without headers)
+-   **Review**: Claude analyzes all stories for quality issues
+-   **Bulk Refinement**: Claude addresses selected issues across all stories
+-   **Interactive Refinement**: Users edit individual stories with natural language
+-   **Parsing Flexibility**: Parser handles multiple formats (with/without headers)
 
 ### GitHub Integration
 
-1. **Story Issues Created**: Each story becomes an issue with checkboxes for acceptance criteria
-2. **Epic Issue Created**: Links to all story issues using `#123` syntax
-3. **Story Issues Updated**: Epic link added to each story (`Part of epic #42`)
-4. **JSON Updated**: GitHub issue numbers saved to epic JSON for future updates
+1.  **Story Issues Created**: Each story becomes an issue with checkboxes for acceptance criteria
+2.  **Epic Issue Created**: Links to all story issues using `#123` syntax
+3.  **Story Issues Updated**: Epic link added to each story (`Part of epic #42`)
+4.  **JSON Updated**: GitHub issue numbers saved to epic JSON for future updates
 
 ### State Machine
 
 The bot uses a conversation state machine with these states:
-- `Q1`, `Q2`, `Q3`: Question flow
-- `GENERATING`: Calling Claude API
-- `APPROVAL`: After generation, before review
-- `REVIEWING`: Running quality review
-- `REVIEW_APPROVAL`: After review, can address issues
-- `REFINING`: Bulk refinement in progress
-- `INTERACTIVE_MODE`: Story selection menu
-- `STORY_FOCUSED`: Editing a specific story
-- `DELETE_CONFIRMATION`: Confirming epic deletion
+
+-   `Q1`, `Q2`, `Q3`: Question flow
+-   `GENERATING`: Calling Claude API
+-   `APPROVAL`: After generation, before review
+-   `REVIEWING`: Running quality review
+-   `REVIEW_APPROVAL`: After review, can address issues
+-   `REFINING`: Bulk refinement in progress
+-   `INTERACTIVE_MODE`: Story selection menu
+-   `STORY_FOCUSED`: Editing a specific story
+-   `DELETE_CONFIRMATION`: Confirming epic deletion
 
 ## Project Structure
 
 ```
 epic-bot/
+├── DESIGN_SPEC.md   # Project design document
 ├── bot.js           # Main Slack bot logic and state machine
 ├── claude.js        # Claude API integration and response parsing
 ├── github.js        # GitHub issue creation/update/deletion
 ├── prompts.js       # Prompt templates for generation, review, refinement
 ├── package.json     # Dependencies (@slack/bolt, @anthropic-ai/sdk, @octokit/rest)
-├── .env             # Environment variables (secrets)
+├── .env.example     # Example environment variables
 └── epics/           # Saved epic JSON files with GitHub issue numbers
 ```
+
+## Roadmap
+
+Here are some features we're planning to add:
+
+-   [ ] `/list-epics` command to show all epics created by a user
+-   [ ] `/edit-epic` command to modify existing epics
+-   [ ] Prettier formatting for Slack messages using Block Kit
+-   [ ] Persistence for sessions to handle bot restarts
+
+## Contributing
+
+Contributions are welcome! Please feel free to open an issue or submit a pull request.
+
+1.  Fork the repository
+2.  Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4.  Push to the branch (`git push origin feature/AmazingFeature`)
+5.  Open a pull request
 
 ## Troubleshooting
 
