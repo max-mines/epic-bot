@@ -48,16 +48,19 @@ npm install
     -   `groups:history`
     -   `im:history`
     -   `mpim:history`
-5.  Navigate to "Slash Commands" and create these commands:
+5.  Navigate to "Slash Commands" and create these commands (leave Request URL blank for now):
     -   `/story` - Description: "Create an epic with user stories"
     -   `/review-epic` - Description: "Review an existing epic from saved file (provide epic ID)"
     -   `/delete-epic` - Description: "Delete an epic and its stories (provide issue number)"
-6.  Navigate to "Socket Mode" and enable it
-    -   Generate an App-Level Token with `connections:write` scope
-7.  Navigate to "Event Subscriptions" and enable events
+6.  Navigate to "Event Subscriptions" and enable events
+    -   Request URL: `https://your-render-url.onrender.com/slack/events`
     -   Subscribe to bot events: `message.channels`, `message.im`, `message.groups`, `message.mpim`
-8.  Install the app to your workspace
-9.  Copy the tokens (you'll need them for `.env`)
+7.  Navigate to "Interactivity & Shortcuts" and enable it
+    -   Request URL: `https://your-render-url.onrender.com/slack/events`
+8.  Go back to "Slash Commands" and update each command's Request URL to:
+    -   `https://your-render-url.onrender.com/slack/events`
+9.  Install the app to your workspace
+10. Copy the tokens (you'll need them for `.env`)
 
 ### 3. Create `.env` File
 
@@ -73,7 +76,6 @@ Edit `.env`:
 # From Slack app settings
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
-SLACK_APP_TOKEN=xapp-...
 
 # From https://console.anthropic.com/
 ANTHROPIC_API_KEY=sk-ant-...
@@ -90,7 +92,7 @@ GITHUB_REPO=your-repo
 npm start
 ```
 
-You should see: `⚡️ Epic Bot v0.3.0 is running!`
+You should see: `⚡️ Epic Bot v0.4.0 is running on port 3000!`
 
 ## Usage
 
@@ -255,10 +257,10 @@ Contributions are welcome! Please feel free to open an issue or submit a pull re
 ## Troubleshooting
 
 **Bot doesn't respond to `/story`:**
-- Check Socket Mode is enabled in Slack app settings
-- Verify `SLACK_APP_TOKEN` is correct in `.env`
+- Verify Slash Command Request URLs point to your Render URL (e.g., `https://your-app.onrender.com/slack/events`)
 - Check bot has `commands` scope in OAuth settings
-- Look at console logs for connection errors
+- Ensure Event Subscriptions Request URL is verified
+- Look at Render logs for incoming requests
 
 **Claude errors:**
 - Verify `ANTHROPIC_API_KEY` is valid
@@ -308,6 +310,7 @@ Enable verbose logging by checking console output for:
 
 ### Version History
 
+- **v0.4.0** (2026-01-27): Switched from Socket Mode to HTTP webhooks for Render.com deployment
 - **v0.3.0** (2026-01-22): Fixed acceptance criteria parsing in bulk refinement
 - **v0.2.1**: Added interactive refinement mode, answer caching
 - **v0.2.0**: Added quality review and bulk refinement

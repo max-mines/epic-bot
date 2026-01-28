@@ -1,17 +1,18 @@
 require('dotenv').config();
-const { App } = require('@slack/bolt');
+const { App, ExpressReceiver } = require('@slack/bolt');
 const fs = require('fs');
 
 const VERSION = 'v0.4.0';
 
+// Use ExpressReceiver for HTTP webhooks (instead of Socket Mode)
+const receiver = new ExpressReceiver({
+  signingSecret: process.env.SLACK_SIGNING_SECRET,
+});
+
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
-  socketMode: true,
-  appToken: process.env.SLACK_APP_TOKEN,
-  socketModeOptions: {
-    logLevel: 'error' // Reduce noise from socket mode client
-  }
+  receiver
 });
 
 // In-memory session storage
@@ -927,19 +928,18 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000); // Check every 10 minutes
 
+const PORT = process.env.PORT || 3000;
+
 (async () => {
   try {
-    await app.start();
-    console.log(`⚡️ Epic Bot ${VERSION} is running!`);
+    await app.start(PORT);
+    console.log(`⚡️ Epic Bot ${VERSION} is running on port ${PORT}!`);
   } catch (error) {
     console.error('❌ Failed to start Epic Bot:', error.message);
 
     // Check for common configuration issues
     if (!process.env.SLACK_BOT_TOKEN) {
       console.error('Missing SLACK_BOT_TOKEN in .env file');
-    }
-    if (!process.env.SLACK_APP_TOKEN) {
-      console.error('Missing SLACK_APP_TOKEN in .env file');
     }
     if (!process.env.SLACK_SIGNING_SECRET) {
       console.error('Missing SLACK_SIGNING_SECRET in .env file');
