@@ -74,64 +74,52 @@ app.command('/story', async ({ command, ack, client }) => {
   }
 });
 
-// /delete-epic command handler
+// /delete-epic command handler (now works with milestones)
 app.command('/delete-epic', async ({ command, ack, client }) => {
   await ack();
 
-  const epicNumber = command.text.trim();
+  const milestoneNumber = command.text.trim();
 
-  if (!epicNumber || isNaN(epicNumber)) {
+  if (!milestoneNumber || isNaN(milestoneNumber)) {
     await client.chat.postEphemeral({
       channel: command.channel_id,
       user: command.user_id,
-      text: 'Please provide an epic issue number: `/delete-epic 42`'
+      text: 'Please provide a milestone number: `/delete-epic 5`'
     });
     return;
   }
 
   try {
-    // Fetch epic details first
-    const { Octokit } = require('@octokit/rest');
-    const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+    // Fetch milestone details
+    const { getMilestone } = require('./github');
+    const milestone = await getMilestone(parseInt(milestoneNumber));
 
-    const epicIssue = await octokit.issues.get({
-      owner: process.env.GITHUB_OWNER,
-      repo: process.env.GITHUB_REPO,
-      issue_number: parseInt(epicNumber)
-    });
-
-    // Find all related story issues
-    const searchQuery = `repo:${process.env.GITHUB_OWNER}/${process.env.GITHUB_REPO} is:issue label:user-story,epic-bot "Part of epic #${epicNumber}"`;
-    const searchResults = await octokit.search.issuesAndPullRequests({
-      q: searchQuery
-    });
-
-    const storyIssues = searchResults.data.items;
-    const storyList = storyIssues.map(s => `- #${s.number}: ${s.title}`).join('\n');
+    const openIssues = milestone.issues.filter(i => i.state === 'open');
+    const storyList = milestone.issues.map(s => `- #${s.number}: ${s.title} (${s.state})`).join('\n');
 
     // Post confirmation message
     const result = await client.chat.postMessage({
       channel: command.channel_id,
-      text: `⚠️ Confirm deletion of epic #${epicNumber}: ${epicIssue.data.title}\n\n**Stories to be closed (${storyIssues.length}):**\n${storyList || '(none)'}\n\n⚠️ **Reply to this message** with \`Y\` to confirm deletion, or anything else to cancel.`
+      text: `⚠️ Confirm closing milestone #${milestoneNumber}: ${milestone.title}\n\n**Stories (${milestone.issues.length} total, ${openIssues.length} open):**\n${storyList || '(none)'}\n\n⚠️ **Reply to this message** with \`Y\` to close milestone and all open issues, or anything else to cancel.`
     });
 
     // Store deletion session
     sessions.set(result.ts, {
       state: 'DELETE_CONFIRMATION',
-      epicNumber: parseInt(epicNumber),
-      epicTitle: epicIssue.data.title,
-      storyCount: storyIssues.length,
+      milestoneNumber: parseInt(milestoneNumber),
+      milestoneTitle: milestone.title,
+      storyCount: openIssues.length,
       userId: command.user_id,
       channelId: command.channel_id,
       lastActivity: Date.now()
     });
 
   } catch (error) {
-    console.error('Error fetching epic:', error);
+    console.error('Error fetching milestone:', error);
     await client.chat.postEphemeral({
       channel: command.channel_id,
       user: command.user_id,
-      text: `❌ Error fetching epic #${epicNumber}: ${error.message}`
+      text: `❌ Error fetching milestone #${milestoneNumber}: ${error.message}`
     });
   }
 });
@@ -261,8 +249,8 @@ async function handleInteractiveCommand(session, text, threadTs, client) {
   if (trimmed === 'done') {
     // Check if this is an existing epic (loaded via /review-epic)
     if (session.isExistingEpic) {
-      // Check if epic has GitHub issue numbers (meaning it was previously published)
-      if (session.epic.github_epic_number) {
+      // Check if epic has GitHub milestone number (meaning it was previously published)
+      if (session.epic.github_milestone_number) {
         // Update existing GitHub issues
         await client.chat.postMessage({
           channel: session.channelId,
@@ -277,7 +265,7 @@ async function handleInteractiveCommand(session, text, threadTs, client) {
         await client.chat.postMessage({
           channel: session.channelId,
           thread_ts: threadTs,
-          text: `✅ Updated epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+          text: `✅ Updated milestone #${result.milestone.number}: ${result.milestone.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
         });
 
         sessions.delete(threadTs);
@@ -308,7 +296,7 @@ async function handleInteractiveCommand(session, text, threadTs, client) {
       await client.chat.postMessage({
         channel: session.channelId,
         thread_ts: threadTs,
-        text: `✅ Created epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+        text: `✅ Created milestone #${result.milestone.number}: ${result.milestone.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
       });
 
       sessions.delete(threadTs);
@@ -578,7 +566,7 @@ async function handleMessage(session, text, threadTs, client) {
         await client.chat.postMessage({
           channel: session.channelId,
           thread_ts: threadTs,
-          text: `✅ Created epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+          text: `✅ Created milestone #${result.milestone.number}: ${result.milestone.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
         });
 
         sessions.delete(threadTs);
@@ -695,7 +683,7 @@ async function handleMessage(session, text, threadTs, client) {
 
       } else if (trimmedText.startsWith('y')) {
         // Check if this is an existing epic
-        if (session.isExistingEpic && session.epic.github_epic_number) {
+        if (session.isExistingEpic && session.epic.github_milestone_number) {
           // Update existing GitHub issues
           await client.chat.postMessage({
             channel: session.channelId,
@@ -710,14 +698,14 @@ async function handleMessage(session, text, threadTs, client) {
           await client.chat.postMessage({
             channel: session.channelId,
             thread_ts: threadTs,
-            text: `✅ Updated epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+            text: `✅ Updated milestone #${result.milestone.number}: ${result.milestone.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
           });
 
           sessions.delete(threadTs);
           return;
         }
 
-        // Create GitHub issues for new epics or existing epics without GitHub issue numbers
+        // Create GitHub issues for new epics or existing epics without GitHub milestone numbers
         await client.chat.postMessage({
           channel: session.channelId,
           thread_ts: threadTs,
@@ -731,7 +719,7 @@ async function handleMessage(session, text, threadTs, client) {
         await client.chat.postMessage({
           channel: session.channelId,
           thread_ts: threadTs,
-          text: `✅ Created epic #${result.epic.number}: ${result.epic.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
+          text: `✅ Created milestone #${result.milestone.number}: ${result.milestone.title}\n\nStories:\n${storyList}\n\nDone! 🎉`
         });
 
         sessions.delete(threadTs);
@@ -771,26 +759,26 @@ async function handleMessage(session, text, threadTs, client) {
         await client.chat.postMessage({
           channel: session.channelId,
           thread_ts: threadTs,
-          text: `Deleting epic #${session.epicNumber}...`
+          text: `Closing milestone #${session.milestoneNumber}...`
         });
 
         try {
           const { deleteEpic } = require('./github');
-          console.log(`Attempting to delete epic #${session.epicNumber}`);
-          const result = await deleteEpic(session.epicNumber);
+          console.log(`Attempting to close milestone #${session.milestoneNumber}`);
+          const result = await deleteEpic(session.milestoneNumber);
           console.log(`Delete result:`, result);
 
           await client.chat.postMessage({
             channel: session.channelId,
             thread_ts: threadTs,
-            text: `✅ Closed epic #${session.epicNumber} and ${result.storiesClosed} story issues on GitHub.\n\n💡 The local epic JSON file was kept in the \`epics/\` folder. You can restore it later using \`/review-epic\` if needed.`
+            text: `✅ Closed milestone #${session.milestoneNumber} and ${result.storiesClosed} story issues on GitHub.\n\n💡 The local epic JSON file was kept in the \`epics/\` folder. You can restore it later using \`/review-epic\` if needed.`
           });
         } catch (error) {
-          console.error('Error deleting epic:', error);
+          console.error('Error closing milestone:', error);
           await client.chat.postMessage({
             channel: session.channelId,
             thread_ts: threadTs,
-            text: `❌ Error deleting epic: ${error.message}\n\nPlease check the logs for details.`
+            text: `❌ Error closing milestone: ${error.message}\n\nPlease check the logs for details.`
           });
         }
 
@@ -800,7 +788,7 @@ async function handleMessage(session, text, threadTs, client) {
         await client.chat.postMessage({
           channel: session.channelId,
           thread_ts: threadTs,
-          text: '❌ Deletion cancelled.'
+          text: '❌ Cancelled.'
         });
 
         sessions.delete(threadTs);

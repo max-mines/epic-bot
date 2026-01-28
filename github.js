@@ -44,86 +44,53 @@ async function createIssues(epic) {
   // TODO: Add option to assign issues to team members automatically
   const issues = [];
 
-  // Create story issues first so we have their numbers for the epic
-  const storyIssues = [];
+  // Create milestone first
+  console.log('[createIssues] Creating milestone...');
+  const milestoneResponse = await octokit.issues.createMilestone({
+    owner,
+    repo,
+    title: `${epic.id}: ${epic.title}`,
+    description: formatMilestoneDescription(epic)
+  });
+
+  const milestoneNumber = milestoneResponse.data.number;
+  const milestoneUrl = milestoneResponse.data.html_url;
+  console.log('[createIssues] Milestone created: #' + milestoneNumber);
+
+  // Create story issues assigned to the milestone
   console.log('[createIssues] Creating story issues...');
   for (const story of epic.stories) {
     console.log('[createIssues] Creating story issue:', story.id);
 
-    // Format acceptance criteria for initial creation
-    const criteria = story.acceptance_criteria
-      .map(c => `- [ ] ${c}`)
-      .join('\n');
-
-    const initialBody = `${story.story}
-
-## Acceptance Criteria
-${criteria}
-
----
-*Note: Epic issue will be linked once created*`;
+    const body = formatIssueBody(story);
 
     const response = await octokit.issues.create({
       owner,
       repo,
       title: `${story.id}: ${story.title}`,
-      body: initialBody,
-      labels: ['user-story', 'epic-bot']
+      body,
+      labels: ['user-story', 'epic-bot'],
+      milestone: milestoneNumber
     });
 
     console.log('[createIssues] Story issue created: #' + response.data.number);
-    storyIssues.push({
+    issues.push({
       number: response.data.number,
       title: story.title,
-      url: response.data.html_url,
-      story: story
-    });
-  }
-
-  // Create the epic issue with links to all stories
-  console.log('[createIssues] Creating epic issue...');
-  const epicBody = formatEpicBody(epic, storyIssues);
-  const epicResponse = await octokit.issues.create({
-    owner,
-    repo,
-    title: `${epic.id}: ${epic.title}`,
-    body: epicBody,
-    labels: ['epic', 'epic-bot']
-  });
-
-  const epicNumber = epicResponse.data.number;
-  const epicUrl = epicResponse.data.html_url;
-  console.log('[createIssues] Epic issue created: #' + epicNumber);
-
-  // Update story issues with proper body including epic link
-  console.log('[createIssues] Updating story issues with epic link...');
-  for (const storyIssue of storyIssues) {
-    console.log('[createIssues] Updating story issue #' + storyIssue.number);
-    const body = formatIssueBody(storyIssue.story, epic, epicNumber);
-    await octokit.issues.update({
-      owner,
-      repo,
-      issue_number: storyIssue.number,
-      body
-    });
-
-    issues.push({
-      number: storyIssue.number,
-      title: storyIssue.title,
-      url: storyIssue.url
+      url: response.data.html_url
     });
   }
 
   console.log('[createIssues] All issues created successfully');
 
-  // Save GitHub issue numbers back to epic JSON
-  console.log('[createIssues] Saving GitHub issue numbers to epic JSON...');
-  epic.github_epic_number = epicNumber;
-  epic.github_epic_url = epicUrl;
+  // Save GitHub milestone number back to epic JSON
+  console.log('[createIssues] Saving GitHub milestone number to epic JSON...');
+  epic.github_milestone_number = milestoneNumber;
+  epic.github_milestone_url = milestoneUrl;
   epic.stories = epic.stories.map((story, index) => ({
     ...story,
-    github_issue_number: storyIssues[index].number,
-    github_issue_url: storyIssues[index].url
+    github_issue_number: issues[index].number,
+    github_issue_url: issues[index].url
   }));
 
   const fs = require('fs');
@@ -131,39 +98,30 @@ ${criteria}
     `./epics/${epic.id}.json`,
     JSON.stringify(epic, null, 2)
   );
-  console.log('[createIssues] Epic JSON updated with GitHub issue numbers');
+  console.log('[createIssues] Epic JSON updated with GitHub milestone number');
 
   return {
-    epic: {
-      number: epicNumber,
+    milestone: {
+      number: milestoneNumber,
       title: epic.title,
-      url: epicUrl
+      url: milestoneUrl
     },
     stories: issues
   };
 }
 
-function formatEpicBody(epic, storyIssues) {
-  // TODO: Add epic description/context field for more detailed overview
-  // TODO: Add estimated story points or complexity indicators
-  const storyList = storyIssues
-    .map((s, i) => `${i + 1}. #${s.number} - ${s.title}`)
-    .join('\n');
-
+function formatMilestoneDescription(epic) {
   return `## Overview
 ${epic.problem}
 
 **Users:** ${epic.users}
 **Tech Stack:** ${epic.tech_stack}
 
-## User Stories
-${storyList}
-
 ---
 *Created with [Epic Bot](https://github.com/max-mines/epic-bot)*`;
 }
 
-function formatIssueBody(story, epic, epicNumber) {
+function formatIssueBody(story) {
   const criteria = story.acceptance_criteria
     .map(c => `- [ ] ${c}`)
     .join('\n');
@@ -171,21 +129,18 @@ function formatIssueBody(story, epic, epicNumber) {
   return `${story.story}
 
 ## Acceptance Criteria
-${criteria}
-
----
-Part of epic #${epicNumber}`;
+${criteria}`;
 }
 
 async function updateIssues(epic) {
   console.log('[updateIssues] Function called with epic:', epic.id);
-  console.log('[updateIssues] Epic GitHub number:', epic.github_epic_number);
+  console.log('[updateIssues] Epic milestone number:', epic.github_milestone_number);
 
-  if (!epic.github_epic_number) {
-    throw new Error('Epic does not have a GitHub issue number. Cannot update issues.');
+  if (!epic.github_milestone_number) {
+    throw new Error('Epic does not have a GitHub milestone number. Cannot update issues.');
   }
 
-  const epicNumber = epic.github_epic_number;
+  const milestoneNumber = epic.github_milestone_number;
   const issues = [];
 
   // Update story issues
@@ -197,7 +152,7 @@ async function updateIssues(epic) {
     }
 
     console.log('[updateIssues] Updating story issue #' + story.github_issue_number);
-    const body = formatIssueBody(story, epic, epicNumber);
+    const body = formatIssueBody(story);
     const response = await octokit.issues.update({
       owner,
       repo,
@@ -214,69 +169,60 @@ async function updateIssues(epic) {
     });
   }
 
-  // Update epic issue
-  console.log('[updateIssues] Updating epic issue #' + epicNumber);
-  const storyIssues = epic.stories
-    .filter(s => s.github_issue_number)
-    .map(s => ({
-      number: s.github_issue_number,
-      title: s.title,
-      url: s.github_issue_url
-    }));
-
-  const epicBody = formatEpicBody(epic, storyIssues);
-  const epicResponse = await octokit.issues.update({
+  // Update milestone
+  console.log('[updateIssues] Updating milestone #' + milestoneNumber);
+  const milestoneResponse = await octokit.issues.updateMilestone({
     owner,
     repo,
-    issue_number: epicNumber,
+    milestone_number: milestoneNumber,
     title: `${epic.id}: ${epic.title}`,
-    body: epicBody
+    description: formatMilestoneDescription(epic)
   });
 
-  const epicUrl = epicResponse.data.html_url;
-  console.log('[updateIssues] Epic issue #' + epicNumber + ' updated successfully');
+  const milestoneUrl = milestoneResponse.data.html_url;
+  console.log('[updateIssues] Milestone #' + milestoneNumber + ' updated successfully');
 
   console.log('[updateIssues] All issues updated successfully');
   return {
-    epic: {
-      number: epicNumber,
+    milestone: {
+      number: milestoneNumber,
       title: epic.title,
-      url: epicUrl
+      url: milestoneUrl
     },
     stories: issues
   };
 }
 
-async function deleteEpic(epicIssueNumber) {
+async function deleteEpic(milestoneNumber) {
   console.log('[deleteEpic] ========== FUNCTION ENTRY ==========');
-  console.log('[deleteEpic] Called with issue number:', epicIssueNumber);
-  console.log('[deleteEpic] Issue number type:', typeof epicIssueNumber);
+  console.log('[deleteEpic] Called with milestone number:', milestoneNumber);
+  console.log('[deleteEpic] Milestone number type:', typeof milestoneNumber);
   console.log('[deleteEpic] Using owner:', owner);
   console.log('[deleteEpic] Using repo:', repo);
 
   try {
-    // First, get the epic issue to find all related story issues
-    console.log('[deleteEpic] Step 1: Fetching epic issue #' + epicIssueNumber + '...');
-    const epicIssue = await octokit.issues.get({
+    // First, get the milestone to verify it exists
+    console.log('[deleteEpic] Step 1: Fetching milestone #' + milestoneNumber + '...');
+    const milestone = await octokit.issues.getMilestone({
       owner,
       repo,
-      issue_number: epicIssueNumber
+      milestone_number: milestoneNumber
     });
-    console.log('[deleteEpic] Epic issue fetched successfully');
-    console.log('[deleteEpic] Epic title:', epicIssue.data.title);
-    console.log('[deleteEpic] Epic state:', epicIssue.data.state);
+    console.log('[deleteEpic] Milestone fetched successfully');
+    console.log('[deleteEpic] Milestone title:', milestone.data.title);
+    console.log('[deleteEpic] Milestone state:', milestone.data.state);
 
-    // Find all issues that reference this epic
-    const searchQuery = `repo:${owner}/${repo} is:issue label:user-story,epic-bot "Part of epic #${epicIssueNumber}"`;
-    console.log('[deleteEpic] Step 2: Searching for story issues');
-    console.log('[deleteEpic] Search query:', searchQuery);
-
-    const searchResults = await octokit.search.issuesAndPullRequests({
-      q: searchQuery
+    // Find all issues assigned to this milestone
+    console.log('[deleteEpic] Step 2: Finding issues in milestone...');
+    const issuesResponse = await octokit.issues.listForRepo({
+      owner,
+      repo,
+      milestone: milestoneNumber,
+      state: 'all'
     });
 
-    const storyIssues = searchResults.data.items;
-    console.log('[deleteEpic] Search complete. Found', storyIssues.length, 'story issues');
+    const storyIssues = issuesResponse.data;
+    console.log('[deleteEpic] Found', storyIssues.length, 'story issues');
 
     if (storyIssues.length > 0) {
       console.log('[deleteEpic] Story issue numbers:', storyIssues.map(s => '#' + s.number).join(', '));
@@ -285,31 +231,35 @@ async function deleteEpic(epicIssueNumber) {
     // Close all story issues
     console.log('[deleteEpic] Step 3: Closing', storyIssues.length, 'story issues...');
     for (const story of storyIssues) {
-      console.log('[deleteEpic] Closing story issue #' + story.number + ':', story.title);
-      const updateResponse = await octokit.issues.update({
-        owner,
-        repo,
-        issue_number: story.number,
-        state: 'closed'
-      });
-      console.log('[deleteEpic] Story issue #' + story.number + ' update response status:', updateResponse.status);
-      console.log('[deleteEpic] Story issue #' + story.number + ' new state:', updateResponse.data.state);
+      if (story.state === 'open') {
+        console.log('[deleteEpic] Closing story issue #' + story.number + ':', story.title);
+        const updateResponse = await octokit.issues.update({
+          owner,
+          repo,
+          issue_number: story.number,
+          state: 'closed'
+        });
+        console.log('[deleteEpic] Story issue #' + story.number + ' update response status:', updateResponse.status);
+        console.log('[deleteEpic] Story issue #' + story.number + ' new state:', updateResponse.data.state);
+      } else {
+        console.log('[deleteEpic] Story issue #' + story.number + ' already closed, skipping');
+      }
     }
 
-    // Close the epic issue
-    console.log('[deleteEpic] Step 4: Closing epic issue #' + epicIssueNumber + '...');
-    const epicUpdateResponse = await octokit.issues.update({
+    // Close the milestone
+    console.log('[deleteEpic] Step 4: Closing milestone #' + milestoneNumber + '...');
+    const milestoneUpdateResponse = await octokit.issues.updateMilestone({
       owner,
       repo,
-      issue_number: epicIssueNumber,
+      milestone_number: milestoneNumber,
       state: 'closed'
     });
-    console.log('[deleteEpic] Epic issue update response status:', epicUpdateResponse.status);
-    console.log('[deleteEpic] Epic issue new state:', epicUpdateResponse.data.state);
+    console.log('[deleteEpic] Milestone update response status:', milestoneUpdateResponse.status);
+    console.log('[deleteEpic] Milestone new state:', milestoneUpdateResponse.data.state);
 
     const result = {
-      epic: epicIssueNumber,
-      storiesClosed: storyIssues.length
+      milestone: milestoneNumber,
+      storiesClosed: storyIssues.filter(s => s.state === 'open').length
     };
     console.log('[deleteEpic] ========== FUNCTION EXIT SUCCESS ==========');
     console.log('[deleteEpic] Returning result:', JSON.stringify(result));
@@ -327,4 +277,31 @@ async function deleteEpic(epicIssueNumber) {
   }
 }
 
-module.exports = { createIssues, updateIssues, deleteEpic, fetchReadme };
+async function getMilestone(milestoneNumber) {
+  console.log('[getMilestone] Fetching milestone #' + milestoneNumber);
+  const milestone = await octokit.issues.getMilestone({
+    owner,
+    repo,
+    milestone_number: milestoneNumber
+  });
+
+  // Get issues in this milestone
+  const issuesResponse = await octokit.issues.listForRepo({
+    owner,
+    repo,
+    milestone: milestoneNumber,
+    state: 'all'
+  });
+
+  return {
+    title: milestone.data.title,
+    state: milestone.data.state,
+    issues: issuesResponse.data.map(i => ({
+      number: i.number,
+      title: i.title,
+      state: i.state
+    }))
+  };
+}
+
+module.exports = { createIssues, updateIssues, deleteEpic, fetchReadme, getMilestone };
