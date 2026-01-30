@@ -124,71 +124,187 @@ app.command('/delete-epic', async ({ command, ack, client }) => {
   }
 });
 
-// /review-epic command handler
+// /review-epic command handler - opens modal with milestone picker
 app.command('/review-epic', async ({ command, ack, client }) => {
   await ack();
 
-  const epicId = command.text.trim();
-
-  if (!epicId) {
-    await client.chat.postEphemeral({
-      channel: command.channel_id,
-      user: command.user_id,
-      text: 'Please provide an epic ID: `/review-epic epic-2026-01-20T03-22-56`\n\nYou can find epic IDs in the `epics/` folder.'
-    });
-    return;
-  }
-
   try {
-    // Load epic from JSON file
-    const epicPath = `./epics/${epicId}.json`;
+    // Fetch open milestones from GitHub
+    const { listOpenMilestones } = require('./github');
+    const milestones = await listOpenMilestones();
 
-    if (!fs.existsSync(epicPath)) {
+    if (milestones.length === 0) {
       await client.chat.postEphemeral({
         channel: command.channel_id,
         user: command.user_id,
-        text: `❌ Epic file not found: ${epicPath}\n\nMake sure the epic ID is correct.`
+        text: '❌ No open milestones found in the repository.\n\nUse `/story` to create an epic first.'
       });
       return;
     }
 
-    const epicData = JSON.parse(fs.readFileSync(epicPath, 'utf-8'));
+    // Build milestone options for dropdown
+    const milestoneOptions = milestones.map(m => ({
+      text: {
+        type: 'plain_text',
+        text: `#${m.number}: ${m.title}`.substring(0, 75),
+        emoji: true
+      },
+      value: String(m.number)
+    }));
 
-    // Create a new thread for the review
-    const result = await client.chat.postMessage({
-      channel: command.channel_id,
-      text: `📝 Reviewing epic: "${epicData.title}"\n\nRunning review...`
+    // Open modal with milestone picker
+    await client.views.open({
+      trigger_id: command.trigger_id,
+      view: {
+        type: 'modal',
+        callback_id: 'review_epic_modal',
+        private_metadata: JSON.stringify({ channel_id: command.channel_id }),
+        title: {
+          type: 'plain_text',
+          text: 'Select Epic to Review'
+        },
+        submit: {
+          type: 'plain_text',
+          text: 'Review Epic'
+        },
+        close: {
+          type: 'plain_text',
+          text: 'Cancel'
+        },
+        blocks: [
+          {
+            type: 'section',
+            block_id: 'milestone_select_block',
+            text: {
+              type: 'mrkdwn',
+              text: `*Choose a milestone to review:*\n\n${milestones.length} open milestone(s) found`
+            },
+            accessory: {
+              type: 'static_select',
+              action_id: 'milestone_select',
+              placeholder: {
+                type: 'plain_text',
+                text: 'Select milestone...'
+              },
+              options: milestoneOptions
+            }
+          }
+        ]
+      }
     });
 
-    // Create session with loaded epic data
+  } catch (error) {
+    console.error('Error opening review modal:', error);
+    await client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: `❌ Error: ${error.message}`
+    });
+  }
+});
+
+// Handle modal submission for /review-epic
+app.view('review_epic_modal', async ({ ack, body, view, client }) => {
+  await ack();
+
+  try {
+    const metadata = JSON.parse(view.private_metadata);
+    const channelId = metadata.channel_id;
+    const userId = body.user.id;
+
+    // Get selected milestone number
+    const selectedMilestone = view.state.values.milestone_select_block.milestone_select.selected_option;
+    if (!selectedMilestone) {
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: '❌ Please select a milestone.'
+      });
+      return;
+    }
+
+    const milestoneNumber = parseInt(selectedMilestone.value);
+
+    // Post initial message
+    const result = await client.chat.postMessage({
+      channel: channelId,
+      text: `📝 Loading milestone #${milestoneNumber}...`
+    });
+
+    // Fetch milestone and issues from GitHub
+    const {
+      fetchMilestoneWithIssues,
+      parseMilestoneDescription,
+      parseIssueToStory
+    } = require('./github');
+
+    const { milestone, issues } = await fetchMilestoneWithIssues(milestoneNumber);
+
+    // Parse milestone description for metadata
+    const epicMetadata = parseMilestoneDescription(milestone.description);
+
+    // Parse issues into stories
+    const stories = issues.map(issue => parseIssueToStory(issue));
+
+    // Extract epic ID from milestone title (format: "epic-XXX: Title")
+    const titleMatch = milestone.title.match(/^(epic-[^:]+):\s*(.+)/);
+    const epicId = titleMatch?.[1] || `epic-${milestoneNumber}`;
+    const epicTitle = titleMatch?.[2] || milestone.title;
+
+    // Build epic object
+    const epicData = {
+      id: epicId,
+      title: epicTitle,
+      users: epicMetadata.users,
+      problem: epicMetadata.problem,
+      tech_stack: epicMetadata.tech_stack,
+      stories: stories,
+      github_milestone_number: milestoneNumber,
+      github_milestone_url: milestone.html_url
+    };
+
+    // Update message
+    await client.chat.update({
+      channel: channelId,
+      ts: result.ts,
+      text: `📝 Reviewing epic: "${epicTitle}"\n\n${stories.length} stories found. Running review...`
+    });
+
+    // Create session
     const session = {
       state: 'REVIEWING',
-      description: epicData.title,
-      userId: command.user_id,
-      channelId: command.channel_id,
+      description: epicTitle,
+      userId: userId,
+      channelId: channelId,
       answers: {
-        users: epicData.users,
-        problem: epicData.problem,
-        techStack: epicData.tech_stack
+        users: epicMetadata.users,
+        problem: epicMetadata.problem,
+        techStack: epicMetadata.tech_stack
       },
-      stories: epicData.stories,
+      stories: stories,
       epic: epicData,
-      isExistingEpic: true, // Flag to prevent duplicate GitHub issue creation
+      isExistingEpic: true,
       lastActivity: Date.now()
     };
 
     sessions.set(result.ts, session);
 
     // Run review
-    await runReview(epicData, result.ts, client, command.channel_id);
+    await runReview(epicData, result.ts, client, channelId);
 
   } catch (error) {
-    console.error('Error loading epic:', error);
-    await client.chat.postEphemeral({
-      channel: command.channel_id,
-      user: command.user_id,
-      text: `❌ Error loading epic: ${error.message}`
-    });
+    console.error('Error in review modal submission:', error);
+    // Try to notify user of error
+    try {
+      const metadata = JSON.parse(view.private_metadata);
+      await client.chat.postEphemeral({
+        channel: metadata.channel_id,
+        user: body.user.id,
+        text: `❌ Error loading milestone: ${error.message}`
+      });
+    } catch (e) {
+      console.error('Could not send error message:', e);
+    }
   }
 });
 
@@ -428,14 +544,9 @@ async function handleStoryFocused(session, text, threadTs, client) {
   // Update the story in the session
   session.stories[session.currentStoryIndex] = updatedStory;
 
-  // Update the epic file
+  // Update the epic in session (will be synced to GitHub when user finishes)
   if (session.epic) {
     session.epic.stories = session.stories;
-    const fs = require('fs');
-    fs.writeFileSync(
-      `./epics/${session.epic.id}.json`,
-      JSON.stringify(session.epic, null, 2)
-    );
   }
 
   const storyNum = session.currentStoryIndex + 1;
@@ -663,14 +774,9 @@ async function handleMessage(session, text, threadTs, client) {
         const updatedStories = await refineStories(session);
         session.stories = updatedStories;
 
-        // Update epic
+        // Update epic in session (will be synced to GitHub when user finishes)
         if (session.epic) {
           session.epic.stories = updatedStories;
-          const fs = require('fs');
-          fs.writeFileSync(
-            `./epics/${session.epic.id}.json`,
-            JSON.stringify(session.epic, null, 2)
-          );
         }
 
         session.state = 'REVIEW_APPROVAL';

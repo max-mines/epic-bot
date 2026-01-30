@@ -111,6 +111,12 @@ async function createIssues(epic) {
 }
 
 function formatMilestoneDescription(epic) {
+  const metadata = JSON.stringify({
+    users: epic.users,
+    problem: epic.problem,
+    tech_stack: epic.tech_stack
+  });
+
   return `## Overview
 ${epic.problem}
 
@@ -118,7 +124,11 @@ ${epic.problem}
 **Tech Stack:** ${epic.tech_stack}
 
 ---
-*Created with [Epic Bot](https://github.com/max-mines/epic-bot)*`;
+*Created with [Epic Bot](https://github.com/max-mines/epic-bot)*
+
+<!-- epic-bot-metadata
+${metadata}
+-->`;
 }
 
 function formatIssueBody(story) {
@@ -304,4 +314,129 @@ async function getMilestone(milestoneNumber) {
   };
 }
 
-module.exports = { createIssues, updateIssues, deleteEpic, fetchReadme, getMilestone };
+// List all open milestones for modal dropdown
+async function listOpenMilestones() {
+  console.log('[listOpenMilestones] Fetching open milestones...');
+  const response = await octokit.issues.listMilestones({
+    owner,
+    repo,
+    state: 'open',
+    sort: 'created',
+    direction: 'desc'
+  });
+
+  console.log('[listOpenMilestones] Found', response.data.length, 'open milestones');
+  return response.data.map(m => ({
+    number: m.number,
+    title: m.title,
+    description: m.description,
+    open_issues: m.open_issues,
+    closed_issues: m.closed_issues
+  }));
+}
+
+// Fetch milestone details and all its issues
+async function fetchMilestoneWithIssues(milestoneNumber) {
+  console.log('[fetchMilestoneWithIssues] Fetching milestone #' + milestoneNumber);
+
+  // Fetch milestone
+  const milestone = await octokit.issues.getMilestone({
+    owner,
+    repo,
+    milestone_number: milestoneNumber
+  });
+
+  // Fetch all issues in milestone
+  const issuesResponse = await octokit.issues.listForRepo({
+    owner,
+    repo,
+    milestone: milestoneNumber,
+    state: 'all',
+    per_page: 100
+  });
+
+  console.log('[fetchMilestoneWithIssues] Found', issuesResponse.data.length, 'issues');
+  return {
+    milestone: milestone.data,
+    issues: issuesResponse.data
+  };
+}
+
+// Parse milestone description back to structured metadata
+function parseMilestoneDescription(description) {
+  if (!description) {
+    return { users: '', problem: '', tech_stack: '' };
+  }
+
+  // Try JSON comment first (new format)
+  const jsonMatch = description.match(/<!--\s*epic-bot-metadata\s*\n([\s\S]*?)\n-->/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1]);
+      console.log('[parseMilestoneDescription] Parsed JSON metadata');
+      return {
+        users: parsed.users || '',
+        problem: parsed.problem || '',
+        tech_stack: parsed.tech_stack || ''
+      };
+    } catch (e) {
+      console.warn('[parseMilestoneDescription] Failed to parse JSON metadata:', e.message);
+    }
+  }
+
+  // Fallback: regex parsing (legacy format)
+  console.log('[parseMilestoneDescription] Using regex fallback');
+  const users = description.match(/\*\*Users:\*\*\s*(.+)/)?.[1]?.trim() || '';
+  const techStack = description.match(/\*\*Tech Stack:\*\*\s*(.+)/)?.[1]?.trim() || '';
+
+  // Problem is between "## Overview" and "**Users:**"
+  const problemMatch = description.match(/## Overview\s*\n([\s\S]*?)(?=\n\*\*Users:\*\*)/);
+  const problem = problemMatch?.[1]?.trim() || '';
+
+  return { users, problem, tech_stack: techStack };
+}
+
+// Parse issue body back to story object
+function parseIssueToStory(issue) {
+  const body = issue.body || '';
+
+  // Extract ID and title from issue title (format: "story-XXX: Title")
+  const titleMatch = issue.title.match(/^(story-\d+):\s*(.+)/i);
+  const id = titleMatch?.[1] || `story-${String(issue.number).padStart(3, '0')}`;
+  const title = titleMatch?.[2] || issue.title;
+
+  // Extract user story (first paragraph, before ## Acceptance Criteria)
+  const storyMatch = body.match(/^([\s\S]*?)(?=\n\n## Acceptance Criteria|\n##|$)/);
+  const story = storyMatch?.[1]?.trim() || '';
+
+  // Extract acceptance criteria (checkbox items)
+  const criteriaSection = body.match(/## Acceptance Criteria\s*\n([\s\S]*?)(?=\n##|$)/);
+  const acceptance_criteria = [];
+  if (criteriaSection) {
+    const matches = criteriaSection[1].matchAll(/- \[[ x]\]\s*(.+)/gi);
+    for (const match of matches) {
+      acceptance_criteria.push(match[1].trim());
+    }
+  }
+
+  return {
+    id,
+    title,
+    story,
+    acceptance_criteria,
+    github_issue_number: issue.number,
+    github_issue_url: issue.html_url
+  };
+}
+
+module.exports = {
+  createIssues,
+  updateIssues,
+  deleteEpic,
+  fetchReadme,
+  getMilestone,
+  listOpenMilestones,
+  fetchMilestoneWithIssues,
+  parseMilestoneDescription,
+  parseIssueToStory
+};

@@ -39,8 +39,10 @@ Generate the updated list of stories in the same format:
    As a [user], I want to [action] so that [benefit]
    - [acceptance criterion 1]
    - [acceptance criterion 2]
+   - [acceptance criterion 3]
+   - [acceptance criterion 4]
 
-Keep stories small with 1-2 suggested acceptance criteria each. Make sure stories are focused, testable, and address all the requested changes.`;
+Keep stories small with 3-4 suggested acceptance criteria each. Make sure stories are focused, testable, and address all the requested changes.`;
 }
 
 function review(epic) {

@@ -10,10 +10,11 @@
   - ✅ Navigate between stories ("next", "prev", "back to menu")
   - ✅ Exit to overview or push all changes to GitHub when done
   - ✅ Print out the available options and navigation at the end of each output
-- [ ] **First-class Epic support in GitHub**: Use GitHub's native Epic type field instead of labels
-  - Leverage GitHub Issues' new Type field for proper Epic/Story relationship
-  - Better integration with GitHub Projects and roadmaps
-  - Improved filtering and organization in GitHub UI
+- [x] **First-class Epic support in GitHub**: Use GitHub Milestones for Epics ✅
+  - ✅ Epics are now created as GitHub Milestones
+  - ✅ Story issues are assigned to their parent Milestone
+  - ✅ Better integration with GitHub Projects and roadmaps
+  - ✅ `/delete-epic` now closes milestone and all its issues
 
 ### Commands
 - [ ] Add `/list-epics` command to show all epics for a user
