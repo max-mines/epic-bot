@@ -758,9 +758,28 @@ async function handleMessage(session, text, threadTs, client) {
           return;
         }
 
-        // Build feedback string from selected issues
-        const issuesList = issuesToAddress.map(issue => `- ${issue.text}`).join('\n');
-        session.feedback = `Address the following issues from the review:\n${issuesList}`;
+        // Check if single issue references a specific story
+        let targetStoryIndex = -1;
+        if (issuesToAddress.length === 1) {
+          const issueText = issuesToAddress[0].text;
+          // Match story references like "Story-006", "story-078", "Story 006"
+          const storyMatch = issueText.match(/story[-\s]?(\d+)/i);
+          if (storyMatch) {
+            const storyNum = parseInt(storyMatch[1]);
+            // Find the story with matching ID or index
+            targetStoryIndex = session.stories.findIndex(s => {
+              const storyIdMatch = s.id?.match(/story-(\d+)/i);
+              if (storyIdMatch) {
+                return parseInt(storyIdMatch[1]) === storyNum;
+              }
+              return false;
+            });
+            // If not found by ID, try by 1-based index
+            if (targetStoryIndex === -1 && storyNum >= 1 && storyNum <= session.stories.length) {
+              targetStoryIndex = storyNum - 1;
+            }
+          }
+        }
 
         session.state = 'REFINING';
         await client.chat.postMessage({
@@ -769,28 +788,101 @@ async function handleMessage(session, text, threadTs, client) {
           text: `Addressing ${issuesToAddress.length} issue(s)...`
         });
 
-        // Trigger refinement with the selected issues
-        const { refineStories } = require('./claude');
-        const updatedStories = await refineStories(session);
-        session.stories = updatedStories;
+        // If single issue targets a specific story, only refine that story
+        if (targetStoryIndex >= 0) {
+          const { refineSingleStory } = require('./claude');
+          const currentStory = session.stories[targetStoryIndex];
+          const epicContext = {
+            description: session.description,
+            users: session.answers.users,
+            problem: session.answers.problem,
+            techStack: session.answers.techStack
+          };
 
-        // Update epic in session (will be synced to GitHub when user finishes)
-        if (session.epic) {
-          session.epic.stories = updatedStories;
+          const updatedStory = await refineSingleStory(
+            currentStory,
+            issuesToAddress[0].text,
+            epicContext
+          );
+
+          // Preserve story ID and GitHub info
+          updatedStory.id = currentStory.id;
+          updatedStory.github_issue_number = currentStory.github_issue_number;
+          updatedStory.github_issue_url = currentStory.github_issue_url;
+
+          // Update only this story
+          session.stories[targetStoryIndex] = updatedStory;
+          if (session.epic) {
+            session.epic.stories = session.stories;
+          }
+
+          // Track which story was modified for selective GitHub update
+          session.modifiedStoryIndices = [targetStoryIndex];
+
+          session.state = 'REVIEW_APPROVAL';
+          const storyNum = targetStoryIndex + 1;
+          const criteria = updatedStory.acceptance_criteria.map(c => `   - ${c}`).join('\n');
+          await client.chat.postMessage({
+            channel: session.channelId,
+            thread_ts: threadTs,
+            text: `✅ Updated Story #${storyNum}: ${updatedStory.title}\n\n   ${updatedStory.story}\n\nAcceptance Criteria:\n${criteria}\n\nCreate GitHub issues? [Y/n/refine]`
+          });
+        } else {
+          // Multiple issues or no specific story - refine all stories
+          const issuesList = issuesToAddress.map(issue => `- ${issue.text}`).join('\n');
+          session.feedback = `Address the following issues from the review:\n${issuesList}`;
+
+          const { refineStories } = require('./claude');
+          const updatedStories = await refineStories(session);
+          session.stories = updatedStories;
+
+          // Update epic in session (will be synced to GitHub when user finishes)
+          if (session.epic) {
+            session.epic.stories = updatedStories;
+          }
+
+          // Clear modified tracking since all stories were regenerated
+          session.modifiedStoryIndices = null;
+
+          session.state = 'REVIEW_APPROVAL';
+          const storyText = formatStories(updatedStories);
+          await client.chat.postMessage({
+            channel: session.channelId,
+            thread_ts: threadTs,
+            text: `✅ Updated stories:\n\n${storyText}\n\nCreate GitHub issues? [Y/n/refine]`
+          });
         }
-
-        session.state = 'REVIEW_APPROVAL';
-        const storyText = formatStories(updatedStories);
-        await client.chat.postMessage({
-          channel: session.channelId,
-          thread_ts: threadTs,
-          text: `✅ Updated stories:\n\n${storyText}\n\nCreate GitHub issues? [Y/n/refine]`
-        });
 
       } else if (trimmedText.startsWith('y')) {
         // Check if this is an existing epic
         if (session.isExistingEpic && session.epic.github_milestone_number) {
-          // Update existing GitHub issues
+          // Check if only one story was modified - update only that one
+          if (session.modifiedStoryIndices && session.modifiedStoryIndices.length === 1) {
+            const storyIndex = session.modifiedStoryIndices[0];
+            const story = session.stories[storyIndex];
+
+            if (story.github_issue_number) {
+              await client.chat.postMessage({
+                channel: session.channelId,
+                thread_ts: threadTs,
+                text: `Updating issue #${story.github_issue_number}...`
+              });
+
+              const { updateSingleIssue } = require('./github');
+              const result = await updateSingleIssue(story);
+
+              await client.chat.postMessage({
+                channel: session.channelId,
+                thread_ts: threadTs,
+                text: `✅ Updated issue #${result.number}: ${result.title}\n\nDone! 🎉`
+              });
+
+              sessions.delete(threadTs);
+              return;
+            }
+          }
+
+          // Update all GitHub issues
           await client.chat.postMessage({
             channel: session.channelId,
             thread_ts: threadTs,

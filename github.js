@@ -203,6 +203,31 @@ async function updateIssues(epic) {
   };
 }
 
+// Update a single story issue on GitHub
+async function updateSingleIssue(story) {
+  console.log('[updateSingleIssue] Updating story:', story.id);
+
+  if (!story.github_issue_number) {
+    throw new Error('Story does not have a GitHub issue number. Cannot update.');
+  }
+
+  const body = formatIssueBody(story);
+  const response = await octokit.issues.update({
+    owner,
+    repo,
+    issue_number: story.github_issue_number,
+    title: `${story.id}: ${story.title}`,
+    body
+  });
+
+  console.log('[updateSingleIssue] Issue #' + story.github_issue_number + ' updated successfully');
+  return {
+    number: story.github_issue_number,
+    title: story.title,
+    url: response.data.html_url
+  };
+}
+
 async function deleteEpic(milestoneNumber) {
   console.log('[deleteEpic] ========== FUNCTION ENTRY ==========');
   console.log('[deleteEpic] Called with milestone number:', milestoneNumber);
@@ -432,6 +457,7 @@ function parseIssueToStory(issue) {
 module.exports = {
   createIssues,
   updateIssues,
+  updateSingleIssue,
   deleteEpic,
   fetchReadme,
   getMilestone,
